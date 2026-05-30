@@ -64,7 +64,7 @@ search:
 ```powershell
 docker compose restart
 # Verify:
-curl "http://localhost:8080/search?q=test&format=json"
+curl "http://localhost:8888/search?q=test&format=json"
 ```
 
 If SearXNG is down or JSON is disabled, the `research` command fails fast with the exact

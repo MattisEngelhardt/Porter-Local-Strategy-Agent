@@ -48,7 +48,7 @@ Execute this sequence before doing anything else. Do not skip steps.
 5. CHECK DEPENDENCIES:
    - Is Ollama running? Run: curl http://localhost:11434/api/tags
    - Is the configured model available? Run: ollama list
-   - For Phase 2+: Is SearXNG reachable? Run: curl http://localhost:8080/search?q=test&format=json
+   - For Phase 2+: Is SearXNG reachable? Run: curl http://localhost:8888/search?q=test&format=json
    - If any dependency is missing: document in PROGRESS.md and write code that fails fast
      with clear setup instructions. Do NOT silently skip.
 6. RUN EXISTING TESTS (if any exist):
@@ -292,7 +292,7 @@ services:
   searxng:
     image: searxng/searxng:latest
     ports:
-      - "8080:8080"
+      - "8888:8080"
     volumes:
       - ./searxng-data:/etc/searxng
     restart: unless-stopped
@@ -304,7 +304,7 @@ services:
 ```
 
 Start: `docker compose up -d`
-Verify: `curl "http://localhost:8080/search?q=test&format=json"`
+Verify: `curl "http://localhost:8888/search?q=test&format=json"`
 
 ---
 

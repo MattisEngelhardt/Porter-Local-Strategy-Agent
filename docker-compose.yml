@@ -1,13 +1,12 @@
 # SearXNG — self-hosted, local, private web search (used from Phase 2).
 # Start:  docker compose up -d
-# Verify: curl "http://localhost:8080/search?q=test&format=json"
+# Verify: curl "http://localhost:8888/search?q=test&format=json"
 # Requires Docker Desktop (https://docker.com), not the VS Code Docker extension.
-version: "3.8"
 services:
   searxng:
     image: searxng/searxng:latest
     ports:
-      - "8080:8080"
+      - "8888:8080"
     volumes:
       - ./searxng-data:/etc/searxng
     restart: unless-stopped

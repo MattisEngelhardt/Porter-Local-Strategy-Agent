@@ -27,3 +27,6 @@ logs/
 
 # SearXNG runtime data (Phase 2)
 searxng-data/
+
+# Docker tutorial (not part of the project)
+welcome-to-docker/

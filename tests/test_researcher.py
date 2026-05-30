@@ -1,7 +1,7 @@
 """Tests for the Phase 2 research engine (core/researcher.py).
 
 All web I/O is mocked so the suite runs fully offline. One live test exercises a
-real SearXNG search and is skipped when SearXNG is not reachable on :8080.
+real SearXNG search and is skipped when SearXNG is not reachable on :8888.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 def _config(**overrides: Any) -> ResearchConfig:
     base: dict[str, Any] = {
-        "searxng_url": "http://localhost:8080",
+        "searxng_url": "http://localhost:8888",
         "max_results_per_query": 8,
         "max_fetch_per_run": 5,
         "cache_ttl_hours": 24,
@@ -236,10 +236,10 @@ def _searxng_reachable(url: str) -> bool:
 
 
 async def test_live_research_returns_results() -> None:
-    """Live: a real SearXNG search returns ranked results (skipped if :8080 down)."""
+    """Live: a real SearXNG search returns ranked results (skipped if :8888 down)."""
     config = _config()
     if not _searxng_reachable(config.searxng_url):
-        pytest.skip("SearXNG not reachable on :8080 — skipping live research test.")
+        pytest.skip("SearXNG not reachable on :8888 — skipping live research test.")
     engine = ResearchEngine(config)
     bundle = await engine.run("Neura Robotics", max_fetch=1)
     assert isinstance(bundle.results, list)

@@ -15,7 +15,7 @@ llm:
   # Only needed if VRAM is tight with 32K context. Not required for Phase 1.
 
 research:
-  searxng_url: "http://localhost:8080"
+  searxng_url: "http://localhost:8888"
   max_results_per_query: 8
   max_fetch_per_run: 5
   cache_ttl_hours: 24

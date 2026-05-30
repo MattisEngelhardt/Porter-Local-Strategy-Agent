@@ -208,7 +208,7 @@ Input: Text (interactive terminal REPL) OR Voice (faster-whisper, local)
   │
   ▼
 [RESEARCH LAYER]
-  SearXNG queries (parallel async, self-hosted Docker, localhost:8080)
+  SearXNG queries (parallel async, self-hosted Docker, localhost:8888)
   Web content fetcher (trafilatura + requests, clean text extraction)
   Document reader: pdf_reader.py (pdfplumber → pytesseract OCR → vision LLM fallback)
   Excel reader: pandas (read user-provided .xlsx as research input)
@@ -429,7 +429,7 @@ strategy-agent/
 ├── config.yaml                         # Single config source — all tunable params
 ├── .env                                # Secrets (empty — no external keys needed)
 ├── .gitignore                          # Includes: brain.md, output/, data/, .venv/, logs/
-├── docker-compose.yml                  # SearXNG (localhost:8080)
+├── docker-compose.yml                  # SearXNG (localhost:8888)
 ├── requirements.txt                    # All pip dependencies
 ├── README.md                           # Setup guide (Docker Desktop, Ollama, models)
 ├── brain.md                            # Agent Brain — GITIGNORED, local only, max 300 lines
@@ -526,7 +526,7 @@ llm:
   # Only needed if VRAM is tight with 32K context. Not required for Phase 1.
 
 research:
-  searxng_url: "http://localhost:8080"
+  searxng_url: "http://localhost:8888"
   max_results_per_query: 8
   max_fetch_per_run: 5
   cache_ttl_hours: 24
@@ -604,7 +604,7 @@ When intent parser detects a business case task, the output pipeline must produc
 These are generated in one agent run, both saved to ./output/, user gets both file paths at end.
 
 ### N-7: SearXNG Docker Prerequisite
-Docker Desktop must be installed (not the VS Code extension — the actual Docker Desktop app from docker.com). Startup health check: GET http://localhost:8080/search?q=test&format=json. Failure → print exact instructions and exit.
+Docker Desktop must be installed (not the VS Code extension — the actual Docker Desktop app from docker.com). Startup health check: GET http://localhost:8888/search?q=test&format=json. Failure → print exact instructions and exit.
 
 ### N-8: Windows Path Handling
 All file paths use `pathlib.Path`. All file I/O specifies `encoding='utf-8'`. No os.path, no string concatenation with separators.

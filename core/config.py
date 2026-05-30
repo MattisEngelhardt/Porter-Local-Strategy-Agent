@@ -44,7 +44,7 @@ class LLMConfig(BaseModel):
 class ResearchConfig(BaseModel):
     """SearXNG / research-layer parameters (used from Phase 2)."""
 
-    searxng_url: str = "http://localhost:8080"
+    searxng_url: str = "http://localhost:8888"
     max_results_per_query: int = 8
     max_fetch_per_run: int = 5
     cache_ttl_hours: int = 24

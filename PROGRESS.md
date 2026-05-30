@@ -97,7 +97,7 @@
 
 ### What to do FIRST next session (Phase 2 starting point)
 1. Run `python -m pytest tests/ -v` — verify all Phase 1 tests pass.
-2. Install Docker Desktop (not on PATH yet) + `docker compose up -d` for SearXNG; verify `curl "http://localhost:8080/search?q=test&format=json"`.
+2. Install Docker Desktop (not on PATH yet) + `docker compose up -d` for SearXNG; verify `curl "http://localhost:8888/search?q=test&format=json"`.
 3. Begin Phase 2 (researcher.py / pdf_reader.py / excel_reader.py) per SPEC §15.
 
 ### PHASE 1 STATUS: ✅ COMPLETE
@@ -120,7 +120,7 @@
 ### Estimated scope: Medium-Large (research engine + 2 document readers + vision)
 
 ### Runtime reality at session start (read-only checks)
-- Ollama: ✅ HTTP 200. Docker/SearXNG: ❌ not installed (`:8080` down). Tesseract: ❌ not on PATH. Phase-2 pip pkgs: ❌ not installed.
+- Ollama: ✅ HTTP 200. Docker/SearXNG: ❌ not installed (`:8888` down). Tesseract: ❌ not on PATH. Phase-2 pip pkgs: ❌ not installed.
 - Decision (confirmed with user): build full Phase 2, unit-test fully offline (mocked), fail-fast with exact setup instructions. Live web/OCR verification deferred until user installs Docker Desktop + Tesseract.
 
 ### Key Technical Decisions Made
