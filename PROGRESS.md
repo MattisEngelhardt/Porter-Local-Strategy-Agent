@@ -208,8 +208,8 @@
 [x] 6. core/synthesizer.py (brain+playbook injection, thinking-by-depth, robust JSON) + test_synthesizer.py (done — 8 tests)
 [x] 7. core/pipeline.py (Interaction, plan_subqueries, full chain, decline path) + test_pipeline.py (done — 6 tests)
 [x] 8. Wire-up: REPL → pipeline, main.py analyze command, keep ask (done — REPL routes free-text through pipeline; analyze CLI; 4 render/interaction tests; live success gate passed)
-[ ] 9. Quality gate: ruff + mypy --strict + full pytest green
-[ ] 10. Docs + Phase 3 handoff + git push origin main
+[x] 9. Quality gate: ruff + mypy --strict + full pytest green (done — 88 passed, mypy clean 23 files)
+[x] 10. Docs + Phase 3 handoff + git push origin main (done — this commit)
 
 ### Runtime reality at session start (read-only checks)
 - Ollama ✅ (gemma4:e4b present). SearXNG ✅ HTTP 200 JSON on :8888. venv + Phase-2 deps ✅.
@@ -230,5 +230,122 @@
 - `research "Figure AI funding 2026" --max-fetch 2` → 8 ranked results (tier classification working), 1 page fetched (~7228 words). ✅
 - All 44 prior tests still pass; config.yaml `agent.max_clarification_rounds: 3`.
 
-### PHASE 3 STATUS: ⏳ IN PROGRESS
+### What Was Built (Completed Tasks)
+- **playbooks/** — `research_playbook.md`, `analysis_playbook.md`, `output_playbook.md` written
+  **verbatim** from SPEC §13 (RULE 14). **core/playbooks.py** — cached UTF-8 loader (`Playbooks`
+  model), fail-fast on missing/empty.
+- **core/memory.py** — `load_brain(MemoryConfig)`: read-only brain.md injection; strips
+  single-`#` scaffolding (keeps `##`/`###` + content), caps at `max_brain_lines`, missing/empty → "".
+  ChromaDB + propose-additions remain Phase 5 (not stubbed).
+- **core/json_utils.py** — tolerant balanced-brace `extract_json_object` / `extract_json_array`
+  (handles fenced / prose-wrapped LLM JSON; returns None → callers use conservative defaults).
+- **core/intent_parser.py** — `parse_intent` (one fast no-thinking LLM classification → task_type
+  / depth / audience / summary; brain-aware); `detect_language` (deterministic DE/EN heuristic,
+  never from LLM; config can force); `route_outputs` (deterministic SPEC §5.4 map, incl.
+  business_case = [DECK, EXCEL] N-6) + `detect_explicit_formats` override.
+- **core/clarification.py** — `clarify` loop: proactive, **one question at a time**, each
+  **multi-dimensional** (depth+format+audience triple / excel matrix-vs-benchmark / audience),
+  budget scales with complexity (quick 0–1, standard 1–2, complex ≤3), hard-capped by
+  `agent.max_clarification_rounds` (3). Pure (injected `ask` callable).
+- **core/synthesizer.py** — `build_system_prompt` (brain + all 3 playbooks + Neura-Lens response
+  format + language directive), `build_user_prompt` (tiered research evidence + documents),
+  `synthesize` (thinking on for standard/deep, off for quick; tolerant JSON → `AnalysisOutput`;
+  graceful degrade on LLM/parse failure), `quality_check` (completeness flags, SPEC §5.3 step 8).
+- **core/pipeline.py** — `run_pipeline` wires the full SPEC §5.3 chain: decompose → brain inject →
+  clarify → research-plan confirm → SearXNG research → synthesis → `PipelineResult`. `Interaction`
+  Protocol + headless `AutoInteraction`; `plan_subqueries` (3–5 sub-queries + bilingual "Los?/Go?"
+  summary); decline path → brain quick answer then offer full research; live progress via notify.
+  **No file rendering (Phase 4), no ChromaDB (Phase 5).**
+- **core/intake.py** — REPL free-text now runs the full pipeline; `ReplInteraction` (rich impl of
+  the Interaction protocol) + `render_result`; document-drop path unchanged.
+- **main.py** — new `analyze "<task>"` command (non-interactive full pipeline via
+  `AutoInteraction`); `ask` one-shot kept; fail-fast on SearXNG/LLM/startup errors.
+- **models/** — `ResearchPlan` (task.py), `PipelineResult` (synthesis.py).
+- **config.yaml** — `agent.max_clarification_rounds: 3` (user-authorized SPEC §5.2 override).
+
+### Files Created/Modified
+| File | Status | Key Contents |
+|------|--------|-------------|
+| playbooks/{research,analysis,output}_playbook.md | Created | Verbatim SPEC §13 rulebooks |
+| core/playbooks.py | Created | Cached playbook loader (Playbooks model) |
+| core/memory.py | Created | load_brain (read-only brain.md injection) |
+| core/json_utils.py | Created | Tolerant JSON object/array extraction |
+| core/intent_parser.py | Created | parse_intent + detect_language + route_outputs |
+| core/clarification.py | Created | Multi-dim, one-at-a-time clarify loop + budget |
+| core/synthesizer.py | Created | Playbook+brain injection, synthesize, quality_check |
+| core/pipeline.py | Created | run_pipeline (reasoning chain) + Interaction/AutoInteraction |
+| core/intake.py | Modified | REPL→pipeline, ReplInteraction, render_result |
+| main.py | Modified | + analyze command, render_result wiring |
+| models/task.py | Modified | + ResearchPlan |
+| models/synthesis.py | Modified | + PipelineResult |
+| config.yaml | Modified | max_clarification_rounds: 3 |
+| .gitignore | Modified | ignore data/cache/ |
+| tests/test_{playbooks,memory,intent_parser,clarification,synthesizer,pipeline}.py | Created | 39 tests |
+| tests/test_intake.py | Modified | +4 render/interaction tests |
+| README.md | Modified | Phase 3 usage (analyze, REPL pipeline, clarification) |
+
+### Implementation Gaps Encountered (from SPEC)
+- **max_clarification_rounds 2→3**: user-authorized override of SPEC §5.2 (documented above).
+- **No orchestrator file in SPEC §7**: `core/pipeline.py` added as a justified module (like
+  `core/config.py`/`core/startup.py` in Phase 1).
+- **Excel matrix-vs-benchmark choice has no Intent field**: the clarification answer is captured
+  in the returned `ClarificationRound` (and feeds synthesis); the actual E-1/E-2 template pick is
+  a Phase-4 concern. Documented in clarification.py.
+- **SynthesisInput carries no raw task text**: synthesis uses `intent.summary` (the restatement)
+  as the task statement; the pipeline passes the real query to the research engine.
+- **Tesseract not on the harness PATH**: it IS on the persistent user PATH; already-open
+  terminals need a restart (standard Windows env behavior). Verified live with session PATH.
+
+### Tests Status
+- test_config.py ✅ · test_local_llm_client.py ✅ · test_researcher.py ✅ · test_excel_reader.py ✅
+  · test_pdf_reader.py ✅ · test_intake.py ✅ (7) · test_playbooks.py ✅ (4) · test_memory.py ✅ (4)
+  · test_intent_parser.py ✅ (10) · test_clarification.py ✅ (7) · test_synthesizer.py ✅ (8)
+  · test_pipeline.py ✅ (6)
+- **Total: 88 passed** (live SearXNG/LLM tests run when services are up, else skip).
+- `ruff format --check` + `ruff check`: clean (36 files). `mypy --strict core llm models main.py`: clean (23 files).
+
+### Live Verification (this session)
+- **Success gate 1 (screening, DE):** `analyze "Screen diese 5 europäischen Robotics Startups als
+  M&A Targets"` → structured **German** analysis, routed **Excel + Brief**, real targets (Dexory,
+  Sitegeist, Wandercraft, Exotec), Neura-Lens per target, two-stage acquisition recommendation,
+  sources cited. ✅
+- **Success gate 2 (business case, EN):** `analyze "Business case for ... Japan ... market size,
+  investment, ROI"` → **English** analysis, routed **Deck + Excel** (dual output, N-6), SCR
+  framework with risks + mitigations, sources (JETRO, trade.gov). ✅
+- **Success gate 3 (language):** DE in → DE out, EN in → EN out. ✅
+- Phase-2 gates re-confirmed: `research` (8 ranked results) + `analyze-doc` OCR (`method: ocr`).
+
+### Git Log (this session)
+- phase-3: env setup + Phase-2 live gate verification + clarify cap=3
+- phase-3: playbooks (research/analysis/output, verbatim SPEC §13) + loader + tests
+- phase-3: core/memory.py brain.md injection (read-only) + tests
+- phase-3: intent parser + deterministic output routing + tolerant JSON util
+- phase-3: clarification dialog (proactive, one-at-a-time, multi-dimensional)
+- phase-3: synthesizer (brain + 3-playbook injection, thinking-by-depth, robust JSON)
+- phase-3: pipeline orchestrator (full SPEC 5.3 reasoning chain) + tests
+- phase-3: wire REPL through pipeline + analyze CLI + ReplInteraction/render_result
+- phase-3: README + Phase 3 handoff (this commit)
+
+### Known Issues / Technical Debt
+- `analyze` and the REPL need SearXNG up (the pipeline always researches unless the plan is
+  declined). SearXNG/LLM errors fail fast with fix instructions; the REPL catches them and keeps
+  looping rather than crashing.
+- Synthesis does extraction + reasoning in one LLM call (no separate extraction pass) — fine for
+  Phase 3; revisit if source counts grow. Per-source excerpt is capped at 1800 chars.
+- The decline path's "memory" is brain.md only (ChromaDB delta is Phase 5).
+- Document attachments aren't auto-read by `analyze`/REPL free-text yet (the doc-drop path reads
+  + shows them separately); `run_pipeline` accepts a `documents=` list for when Phase 4/5 wires it.
+
+### What to do FIRST next session (Phase 4 starting point)
+1. Run `python -m pytest tests/ -v` — verify 88 pass (live tests need Ollama + SearXNG up).
+2. Add `assets/neura_logo.png` (referenced in SPEC §7/§11, still absent) before building decks.
+3. Begin Phase 4 (SPEC §15): Jinja2 brief templates T-1..T-6 + weasyprint PDF; `python-pptx`
+   deck (10 slide types, Neura colors, logo bottom-right); **excel_builder.py** (E-1..E-4);
+   `exporter.py` orchestration. The renderers consume `AnalysisOutput` (synthesis.py) and the
+   `DeckStructure`/`WorkbookContent` contracts (models/deck.py, models/workbook.py).
+4. Wire rendering into the pipeline: `run_pipeline` already returns `routed_formats`
+   (incl. Business Case dual output) — Phase 4 turns those into files in `./output/` and prints
+   the paths (replace the "Would generate (Phase 4)" note in `render_result`).
+
+### PHASE 3 STATUS: ✅ COMPLETE
 ---

@@ -4,9 +4,11 @@ A 100% local AI research/strategy agent turning research-heavy tasks into profes
 **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on your
 machine with no external AI APIs, ever.
 
-> **Status: Phase 2 (Research Engine + Document Reading) complete.** The agent now
-> searches the web (SearXNG) and reads PDFs / images / Excel files. Reasoning, output
-> generation, memory, and voice land in Phases 3–5. See `PROGRESS.md` for the live status
+> **Status: Phase 3 (Agent Brain) complete.** The agent now understands a task, asks up to
+> 3 smart clarifying questions (one at a time), decomposes it, runs web research, injects
+> persistent Neura context (`brain.md`) + the three playbooks, and reasons into a **structured
+> analysis** (bottom line → sections → sources) in the input's language (DE/EN). File rendering
+> (PDF/PPTX/Excel), memory, and voice land in Phases 4–5. See `PROGRESS.md` for the live status
 > and `strategy_agent_SPEC.md` for the full specification.
 
 ---
@@ -21,7 +23,9 @@ machine with no external AI APIs, ever.
 - **[Docker Desktop](https://docker.com)** — needed for the `research` command (SearXNG web
   search). The VS Code Docker extension is **not** enough; install the actual Docker Desktop app.
 - **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** — *optional*, only for
-  reading **scanned** PDFs / images. Text PDFs and Excel files need no extra binary.
+  reading **scanned** PDFs / images. Text PDFs and Excel files need no extra binary. On Windows,
+  add its install dir (e.g. `C:\Program Files\Tesseract-OCR`) to your PATH and **restart the
+  terminal** so `pytesseract` can find `tesseract.exe`.
 
 ## Setup
 
@@ -73,10 +77,19 @@ fix instructions — the rest of the agent (`ask`, REPL, `analyze-doc`) still wo
 ## Usage
 
 ```powershell
-# Single question
+# Full agent run (intent → clarify → research → structured analysis). Needs SearXNG.
+python main.py analyze "Screen these 5 European robotics startups as M&A targets"
+python main.py analyze "Business case for Japan expansion: market size, investment, ROI"
+
+# Interactive REPL — the primary experience. Free text runs the full agent pipeline:
+# it asks up to 3 one-at-a-time clarifying questions, shows a research plan to confirm,
+# then researches and produces a structured analysis. Drop a file path to read a document.
+python main.py            # type 'exit' to quit
+
+# Single question — a plain one-shot LLM answer, no research, no clarification
 python main.py ask "Was macht Neura Robotics?"
 
-# Web research — ranked, deduplicated, source-tiered results (needs SearXNG)
+# Web research — ranked, deduplicated, source-tiered results (no synthesis)
 python main.py research "Figure AI funding 2026"
 python main.py research "humanoid robotics market" --max-fetch 3
 
@@ -84,16 +97,20 @@ python main.py research "humanoid robotics market" --max-fetch 3
 python main.py analyze-doc path\to\report.pdf
 python main.py analyze-doc path\to\pipeline.xlsx
 
-# Interactive REPL (type 'exit' to quit) — you can also drop a file path to read it
-python main.py
-
 # Use a different config file
 python main.py --config path\to\config.yaml ask "..."
 ```
 
+**`analyze` vs the REPL vs `ask`:** `analyze` runs the full pipeline non-interactively
+(clarifications auto-answered with sensible defaults, research plan auto-confirmed) — ideal for
+scripting. The **REPL** (`python main.py`) is the interactive version: it actually asks the
+clarifying questions and lets you confirm or decline the research plan (declining gives a quick
+`brain.md`-grounded answer instead). `ask` is a simple one-shot with no research.
+
 On startup the agent checks that the LLM backend is reachable and the configured model is
-available; `research` additionally checks SearXNG. If a check fails, it prints exact fix
-instructions and exits (fail fast).
+available; `analyze`/`research` additionally check SearXNG. If a check fails, it prints exact
+fix instructions and exits (fail fast). Output language follows the input (German in → German
+out, English in → English out).
 
 ## Configuration
 
@@ -109,21 +126,24 @@ Everything tunable lives in **`config.yaml`** — nothing is hardcoded.
 - **Context window:** `llm.num_ctx` (default 32768) is sent on **every** LLM call. Ollama
   otherwise silently defaults all models to 4096 tokens — this agent never relies on that default.
 
-## Project layout (through Phase 2)
+## Project layout (through Phase 3)
 
 ```
 config.yaml            # single source of all tunable params
-main.py                # entry point: ask / research / analyze-doc / REPL
-core/                  # config, startup checks, REPL intake,
-                       #   researcher (SearXNG + fetch + cache),
-                       #   pdf_reader, excel_reader
+main.py                # entry point: analyze / ask / research / analyze-doc / REPL
+core/                  # config, startup checks, REPL intake (+ pipeline wiring),
+                       #   researcher (SearXNG + fetch + cache), pdf_reader, excel_reader,
+                       #   intent_parser, clarification, memory (brain.md inject),
+                       #   playbooks, synthesizer, pipeline (the reasoning chain), json_utils
 llm/                   # backend-agnostic LocalLLMClient (text + Ollama vision)
 models/                # Pydantic v2 data contracts (all phases)
-tests/                 # pytest suite
+playbooks/             # research / analysis / output rulebooks injected into synthesis
+tests/                 # pytest suite (88 tests)
 docker-compose.yml     # SearXNG
 ```
 
-`brain.md` (agent context) is **gitignored** and local-only; it is seeded in Phase 5.
+`brain.md` (agent context) is **gitignored** and local-only; it is injected (read-only) into
+every synthesis call in Phase 3 and seeded with content in Phase 5.
 
 ## Development
 
