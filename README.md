@@ -1,7 +1,6 @@
 # Strategy Agent
 
-A 100% local AI research/strategy agent for two Neura Robotics internship roles
-(CEO Office Intern, Strategy Intern). It turns research-heavy tasks into professional
+A 100% local AI research/strategy agent turning research-heavy tasks into professional
 **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on your
 machine with no external AI APIs, ever.
 
