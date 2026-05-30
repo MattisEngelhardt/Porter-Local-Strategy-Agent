@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from models.task import Language
+from models.task import ClarificationRound, Language
 
 
 class SourceTier(StrEnum):
@@ -83,3 +83,66 @@ class ResearchBundle(BaseModel):
     results: list[RankedResult] = Field(default_factory=list)
     fetched: list[FetchedContent] = Field(default_factory=list)
     from_cache: bool = False
+
+
+# --- Phase 3.5: multi-agent deep research contracts --------------------------------------
+class Confidence(StrEnum):
+    """Confidence in a researched fact (deep_research_playbook, SPEC §15.5)."""
+
+    HIGH = "high"  # cross-referenced in ≥2 independent authoritative sources
+    MEDIUM = "medium"  # single authoritative source, or 2 weaker sources
+    ESTIMATE = "estimate"  # inferred / single weak source / undated — flag explicitly
+
+
+class Finding(BaseModel):
+    """One researched fact with provenance: source + date + confidence (deep-research rule)."""
+
+    claim: str
+    source_url: str = ""
+    date: str | None = None  # publication / as-of date of the source (free-form, e.g. "2026-03")
+    confidence: Confidence = Confidence.MEDIUM
+    recency_flag: str | None = None  # e.g. "stale (>6mo)"; None when fresh / not time-sensitive
+
+
+class WorkerFindings(BaseModel):
+    """Structured output of one research worker for its assigned sub-topic."""
+
+    sub_topic: str
+    queries: list[str] = Field(default_factory=list)
+    findings: list[Finding] = Field(default_factory=list)
+    sources: list[FetchedContent] = Field(default_factory=list)
+    gaps: list[str] = Field(default_factory=list)
+    confidence: Confidence = Confidence.MEDIUM
+
+
+class CoverageGap(BaseModel):
+    """A coverage gap flagged across the worker findings (advisory; fail-open)."""
+
+    sub_topic: str = ""
+    issue: str
+
+
+class CoverageReport(BaseModel):
+    """Advisory coverage assessment of the aggregated findings (never blocks delivery)."""
+
+    covered: bool = True
+    gaps: list[CoverageGap] = Field(default_factory=list)
+
+
+class ResearchReport(BaseModel):
+    """Aggregated multi-agent research output (Phase 3.5) — the manager's evidence report.
+
+    Replaces the single-pass :class:`ResearchBundle` path in the advanced loop. ``evidence`` is
+    the deduped fetched content fed to synthesis; the worker findings digest + telemetry make the
+    self-correcting research visible in the result panel.
+    """
+
+    query: str = ""
+    sub_topics: list[str] = Field(default_factory=list)
+    worker_findings: list[WorkerFindings] = Field(default_factory=list)
+    evidence: list[FetchedContent] = Field(default_factory=list)
+    rounds_used: int = 0
+    workers_used: int = 0
+    sources_evaluated: int = 0
+    midresearch: list[ClarificationRound] = Field(default_factory=list)
+    coverage: CoverageReport | None = None

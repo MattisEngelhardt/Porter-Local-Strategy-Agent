@@ -180,6 +180,28 @@ def _build_analysis(data: dict[str, object], synthesis_input: SynthesisInput) ->
     )
 
 
+def parse_analysis(response: str, synthesis_input: SynthesisInput) -> AnalysisOutput:
+    """Parse an LLM response into a structured :class:`AnalysisOutput` (tolerant).
+
+    Shared by :func:`synthesize` and the Phase-3.5 revision loop (``core/critic.revise``) so both
+    use one JSON→AnalysisOutput path. A bad/empty parse degrades gracefully — the raw text is
+    wrapped in a single section rather than raising (SPEC REQ-5).
+    """
+    intent = synthesis_input.intent
+    data = extract_json_object(response)
+    if data is None:
+        text = response.strip()
+        return AnalysisOutput(
+            title=_default_title(intent),
+            language=intent.language,
+            bottom_line=text[:400],
+            sections=[Section(heading="Analysis", body=text)] if text else [],
+            sources=_sources_from_research(synthesis_input),
+            recommended_formats=intent.output_formats,
+        )
+    return _build_analysis(data, synthesis_input)
+
+
 def synthesize(client: LocalLLMClient, synthesis_input: SynthesisInput) -> AnalysisOutput:
     """Reason over the evidence with playbooks + brain and return a structured analysis.
 
@@ -208,19 +230,7 @@ def synthesize(client: LocalLLMClient, synthesis_input: SynthesisInput) -> Analy
             recommended_formats=intent.output_formats,
         )
 
-    data = extract_json_object(response)
-    if data is None:
-        text = response.strip()
-        return AnalysisOutput(
-            title=_default_title(intent),
-            language=intent.language,
-            bottom_line=text[:400],
-            sections=[Section(heading="Analysis", body=text)] if text else [],
-            sources=_sources_from_research(synthesis_input),
-            recommended_formats=intent.output_formats,
-        )
-
-    return _build_analysis(data, synthesis_input)
+    return parse_analysis(response, synthesis_input)
 
 
 def quality_check(output: AnalysisOutput) -> list[str]:

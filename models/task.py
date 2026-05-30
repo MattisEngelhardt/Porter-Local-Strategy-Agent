@@ -56,6 +56,19 @@ class Depth(StrEnum):
     DEEP = "deep"  # 45-60 min
 
 
+class EffortLevel(StrEnum):
+    """Effort master dial (Phase 3.5, SPEC §15.5): one knob for the whole loop's intensity.
+
+    Auto-detected from task complexity and overridable (``/effort`` in the REPL, ``--effort`` on
+    ``analyze``). Drives every budget via ``config.effort.level_for(...)``. ``Depth`` is derived
+    from effort for the time estimate only; effort is the gating dial everywhere.
+    """
+
+    LOW = "low"  # ~12 min: 1 worker, 1 round, no critique
+    HIGH = "high"  # ~30 min: 3 workers, 2 rounds, critique + 1 revision (default when unsure)
+    ULTRA = "ultra"  # ~60+ min: 5 workers, 3 rounds, critique + 2 revisions
+
+
 class Audience(StrEnum):
     """Intended audience for the output (SPEC §5.2)."""
 
@@ -79,6 +92,7 @@ class Intent(BaseModel):
     output_formats: list[OutputFormat]
     language: Language
     depth: Depth = Depth.STANDARD
+    effort: EffortLevel = EffortLevel.HIGH  # master dial (Phase 3.5); default never shallow
     audience: Audience | None = None
     summary: str = ""  # short restatement of what the user wants
 

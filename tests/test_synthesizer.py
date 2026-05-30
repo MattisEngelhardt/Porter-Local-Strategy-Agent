@@ -10,6 +10,7 @@ from core.playbooks import load_playbooks
 from core.synthesizer import (
     build_system_prompt,
     build_user_prompt,
+    parse_analysis,
     quality_check,
     synthesize,
 )
@@ -138,6 +139,23 @@ def test_synthesize_llm_error_degrades() -> None:
     out = synthesize(_RaiseClient(), _si())  # type: ignore[arg-type]
     assert "Synthesis failed" in out.bottom_line
     assert out.recommended_formats == [OutputFormat.BRIEF]
+
+
+# -------------------------------------------------------------- parse_analysis (Phase 3.5)
+def test_parse_analysis_shared_path() -> None:
+    """parse_analysis turns JSON into AnalysisOutput and wraps raw prose on bad JSON."""
+    out = parse_analysis(
+        '{"title":"T","bottom_line":"BL","sections":[{"heading":"H","body":"B"}],"sources":[]}',
+        _si(),
+    )
+    assert out.title == "T"
+    assert out.sections[0].heading == "H"
+
+    raw = parse_analysis(
+        "not json", _si(research=[FetchedContent(url="https://x.com/a", text="t")])
+    )
+    assert raw.sections[0].body.startswith("not json")
+    assert raw.sources[0].url == "https://x.com/a"
 
 
 # -------------------------------------------------------------- quality check
