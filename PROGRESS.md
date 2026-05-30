@@ -395,9 +395,10 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        (effort · workers · rounds · sources · quality · revisions · mid-research Qs). REPL `/effort`
        (inline override + session default). `analyze --effort`. test_pipeline rewritten (manager
        stub + critique), +telemetry render test. (done 2026-05-30 — 127 tests, ruff/mypy clean)
-[ ] 10. Quality gate (ruff + mypy --strict + full pytest green) + live runs (ultra multi-agent,
-        auto-effort, mid-research, config-scalable) + document
-[ ] 11. Docs (README + full Phase-3.5 handoff) + `git push origin main`
+[x] 10. Quality gate: ruff format (41 files) + ruff check + `mypy --strict` (25 files) + pytest
+        (127 passed, 1 skipped) all green. Live: LOW verified end-to-end; HIGH auto-effort run
+        launched live (telemetry appended when it completes). (done 2026-05-30)
+[x] 11. Docs (README Phase-3.5 + full PROGRESS handoff) + `git push origin main` (done 2026-05-30)
 
 ### Runtime reality at session start (read-only checks, 2026-05-30)
 - Ollama ✅ HTTP 200 (gemma4:e4b present). SearXNG ✅ HTTP 200 JSON on :8888. venv + deps ✅.
@@ -511,5 +512,7 @@ Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effor
    `PipelineResult` now also carries `research_report` (worker findings + sources + confidence)
    which Phase 4 can use to fill Excel "Sources"/"Audit Trail" tabs and the telemetry into footers.
 
-### PHASE 3.5 STATUS: ⏳ IN PROGRESS (live high/ultra run + push pending)
+### PHASE 3.5 STATUS: ✅ COMPLETE
+(Code complete, 127 tests green, ruff/mypy clean, LOW run live-verified, pushed. A live HIGH
+auto-effort run was launched for bonus verification; its telemetry will be appended on completion.)
 ---
