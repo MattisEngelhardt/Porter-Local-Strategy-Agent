@@ -1,0 +1,33 @@
+# Tooling configuration for the Strategy Agent.
+# Justified addition to the SPEC §7 tree: makes this repo self-contained (pytest was
+# otherwise picking up the legacy parent monorepo's pyproject.toml) and centralizes
+# ruff / mypy / pytest settings. Runtime dependencies live in requirements.txt.
+
+[project]
+name = "strategy-agent"
+version = "0.1.0"
+description = "Local AI research/strategy agent for Neura Robotics internship workflows."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+ignore_missing_imports = false
+
+# PyYAML ships no type stubs; avoid adding types-PyYAML as a runtime dep (RULE 3).
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true

@@ -1,0 +1,65 @@
+llm:
+  provider: "ollama"
+  base_url: "http://localhost:11434"    # Change to switch backend
+  model: "gemma4:e4b"
+  num_ctx: 32768                        # CRITICAL: Always passed to API — never rely on default
+  temperature: 0.2
+  thinking_mode: true
+  capabilities:
+    vision: true
+    context_window: 131072
+    practical_context: 32768
+  embedding_model: "nomic-embed-text"
+  # KV cache optimization — set as SYSTEM environment variable, NOT read from this file:
+  # Windows: setx OLLAMA_KV_CACHE_TYPE q8_0
+  # Only needed if VRAM is tight with 32K context. Not required for Phase 1.
+
+research:
+  searxng_url: "http://localhost:8080"
+  max_results_per_query: 8
+  max_fetch_per_run: 5
+  cache_ttl_hours: 24
+  parallel_queries: 3
+
+memory:
+  enabled: true
+  db_path: "./data/chroma_db"
+  collection_name: "strategy_agent_memory"
+  top_k_retrieval: 5
+  brain_path: "./brain.md"             # Injected into every synthesis call
+  max_brain_lines: 300
+
+agent:
+  default_language: "auto"             # "auto" | "de" | "en"
+  max_clarification_rounds: 2
+  show_research_plan: true
+
+output:
+  default_format: "brief"              # "brief" | "deck" | "excel" | agent-decides
+  output_dir: "./output"
+  include_logo: true
+  logo_path: "./assets/neura_logo.png"
+  colors:
+    black: "#000000"
+    white: "#FFFFFF"
+    accent_cyan: "#4DACC7"
+    dark_bg: "#111111"
+    charcoal: "#2D2D2D"
+    light_surface: "#F5F5F5"
+    text_dark: "#111111"
+    text_light: "#FFFFFF"
+    excel_input_cell: "#FFF2CC"        # Yellow — user-editable input cells
+    excel_formula_cell: "#DDEEFF"      # Blue — formula output cells
+    excel_positive: "#E2EFDA"          # Green — positive/good values
+    excel_negative: "#FFDDC1"          # Red-orange — negative/risk values
+    excel_header: "#2D2D2D"            # Dark header rows
+
+voice:
+  enabled: false                       # Set true in Phase 5
+  model: "base"
+  language: "auto"
+  hotkey: "ctrl+space"
+
+logging:
+  level: "INFO"
+  log_file: "./logs/agent.log"
