@@ -204,7 +204,7 @@
 [x] 2. Playbooks (3 .md verbatim §13) + core/playbooks.py loader + test_playbooks.py (done — 4 tests)
 [x] 3. core/memory.py load_brain (read-only brain.md injection) + test_memory.py (done — 4 tests)
 [x] 4. models additions (ResearchPlan, PipelineResult) + core/intent_parser.py + test_intent_parser.py (done — 10 tests + live-verified)
-[ ] 5. core/clarification.py (budget, multi-dim bilingual, one-at-a-time loop) + test_clarification.py
+[x] 5. core/clarification.py (budget, multi-dim bilingual, one-at-a-time loop) + test_clarification.py (done — 7 tests)
 [ ] 6. core/synthesizer.py (brain+playbook injection, thinking-by-depth, robust JSON) + test_synthesizer.py
 [ ] 7. core/pipeline.py (Interaction, plan_subqueries, full chain, decline path) + test_pipeline.py
 [ ] 8. Wire-up: REPL → pipeline, main.py analyze command, keep ask
