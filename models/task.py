@@ -69,6 +69,18 @@ class EffortLevel(StrEnum):
     ULTRA = "ultra"  # ~60+ min: 5 workers, 3 rounds, critique + 2 revisions
 
 
+class WorkMode(StrEnum):
+    """How the agent fulfils a task (Phase 3.5 — internal doc-prep vs web research).
+
+    ``RESEARCH`` runs the multi-agent web-research loop. ``DOCUMENT_PREP`` skips research and
+    planning entirely: it reads the provided internal documents deeply and consolidates them into
+    one management-ready briefing (the CEO-office use case).
+    """
+
+    RESEARCH = "research"
+    DOCUMENT_PREP = "document_prep"
+
+
 class Audience(StrEnum):
     """Intended audience for the output (SPEC §5.2)."""
 

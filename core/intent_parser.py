@@ -27,6 +27,7 @@ from models.task import (
     OutputFormat,
     TaskRequest,
     TaskType,
+    WorkMode,
 )
 
 # --- language detection ------------------------------------------------------------------
@@ -189,6 +190,38 @@ def route_outputs(
     if explicit:
         return [fmt for fmt in _FORMAT_ORDER if fmt in explicit]
     return list(_OUTPUT_ROUTE.get(task_type, [OutputFormat.BRIEF]))
+
+
+# --- work-mode routing (Phase 3.5: internal doc-prep vs web research) --------------------
+# Phrases that force fresh web research even when documents are attached (e.g. "compare the
+# attached memo against the latest market data online").
+_RESEARCH_FORCE_KEYWORDS = (
+    "recherchiere",
+    "research online",
+    "search the web",
+    "im internet",
+    "aktuelle news",
+    "latest news",
+    "market data",
+    "marktdaten",
+    "wettbewerb",
+    "competitor",
+    "online suchen",
+)
+
+
+def route_mode(task_text: str, has_documents: bool, task_type: TaskType) -> WorkMode:
+    """Decide whether a task needs web research or internal document preparation (Phase 3.5).
+
+    Documents attached → DOCUMENT_PREP (consolidate them for management) unless the task
+    explicitly asks to pull fresh web data. No documents → RESEARCH (the default web loop).
+    """
+    if not has_documents:
+        return WorkMode.RESEARCH
+    lowered = task_text.lower()
+    if any(kw in lowered for kw in _RESEARCH_FORCE_KEYWORDS):
+        return WorkMode.RESEARCH
+    return WorkMode.DOCUMENT_PREP
 
 
 # --- effort detection + override (Phase 3.5, SPEC §15.5) ---------------------------------

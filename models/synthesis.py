@@ -5,6 +5,8 @@ Used by the reasoning/synthesis layer (Phase 3+). Phase 1 only defines the contr
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
@@ -91,3 +93,5 @@ class PipelineResult(BaseModel):
     critique: Critique | None = None
     revisions: int = 0
     research_report: ResearchReport | None = None
+    mode: str = "research"  # "research" | "document_prep" (Phase 3.5)
+    artifact_path: Path | None = None  # the written .md blueprint (document-prep mode)

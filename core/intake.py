@@ -154,11 +154,22 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
             border_style=accent,
         )
     )
+    if result.artifact_path is not None:
+        console.print(
+            Panel(
+                f"Blueprint (.md cheat-sheet for the final {formats}): "
+                f"[bold]{result.artifact_path}[/bold]",
+                title="document briefing written",
+                border_style=accent,
+            )
+        )
     console.print(Panel(_telemetry_text(result), title="run telemetry", border_style="dim"))
 
 
 def _telemetry_text(result: PipelineResult) -> str:
     """Build the effort + self-correction telemetry line for the result panel (Phase 3.5)."""
+    if result.mode == "document_prep":
+        return "mode: [bold]document-prep[/bold]  ·  internal documents consolidated (no research)"
     parts = [f"effort: [bold]{result.effort.value}[/bold]"]
     report = result.research_report
     if report is not None:

@@ -224,6 +224,50 @@ def analyze(
     render_result(console, result, config.output.colors.accent_cyan)
 
 
+@app.command()
+def prepare(
+    ctx: typer.Context,
+    files: Annotated[
+        list[Path], typer.Argument(help="One or more internal document paths (PDF / image / .xlsx)")
+    ],
+    task_text: Annotated[
+        str,
+        typer.Option("--task", "-t", help="What to prepare (e.g. 'consolidate for the board')"),
+    ] = "Consolidate these documents into one management briefing",
+) -> None:
+    """Consolidate internal documents into ONE management briefing (no web research).
+
+    The CEO-office mode: reads the documents deeply, applies the doc-prep playbook (zero
+    hallucination, management structure), and writes a Markdown blueprint to ``./output/`` — the
+    cheat-sheet the final PDF/PPTX (Phase 4) renders from.
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)  # LLM client enables the vision fallback for scans
+
+    try:
+        with console.status("[dim]reading documents…[/dim]", spinner="dots"):
+            documents = [read_document(path, llm=client) for path in files]
+        with console.status("[dim]preparing management briefing…[/dim]", spinner="dots"):
+            result = run_pipeline(
+                client,
+                config,
+                TaskRequest(raw_input=task_text),
+                AutoInteraction(),
+                documents=documents,
+            )
+    except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    render_result(console, result, config.output.colors.accent_cyan)
+
+
 @app.command(name="analyze-doc")
 def analyze_doc(
     ctx: typer.Context,

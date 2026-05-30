@@ -519,7 +519,32 @@ Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effor
    `PipelineResult` now also carries `research_report` (worker findings + sources + confidence)
    which Phase 4 can use to fill Excel "Sources"/"Audit Trail" tabs and the telemetry into footers.
 
+### Addendum — CEO-Office Document-Preparation Mode (internal docs, no research)
+A second use case added on the same loop: when documents are attached and no fresh web data is
+needed, the agent **consolidates internal documents into one management briefing** instead of
+researching. New pieces:
+- **Routing** — `route_mode(task, has_documents, task_type)` (`WorkMode.RESEARCH` |
+  `DOCUMENT_PREP`): documents → doc-prep unless the task explicitly asks for web data; wired into
+  `run_pipeline` (skips planning/confirm/research entirely).
+- **`playbooks/doc_prep_playbook.md`** (authored, user review pending) — zero-hallucination rule
+  (every figure traced to its source, gaps flagged), what management needs, **.md-blueprint-first**,
+  how to build top-notch PDF/PPTX, and how to ask targeted clarifying questions.
+- **`core/doc_synthesis.py`** — `propose_doc_questions` (read → identify themes → ask ≤budget
+  precise questions on emphasis/audience/format/style, fail-open), `synthesize_briefing` (deep read,
+  thinking on, guidance-injected, zero-hallucination prompt), `to_management_markdown` (the
+  Spickzettel/blueprint) + `write_briefing_md` → `./output/…_briefing.md`.
+- **Loop optimization** — doc-prep gets the same interleaved clarification idea as mid-research:
+  the agent asks theme-specific questions *after reading* (budget = min(agent rounds,
+  effort.max_clarifications)); answers feed synthesis as guidance. Empty answers → assume + proceed.
+- **Pipeline/presentation** — `PipelineResult.mode` + `artifact_path`; `render_result` shows the
+  blueprint path + a doc-prep telemetry line. **`main.py prepare <files…> --task`** CLI.
+- **Output:** PDF brief is the default deliverable, PPTX for board/presentation; both render from
+  the same `AnalysisOutput` in Phase 4. The `.md` blueprint is produced now as their cheat-sheet.
+- **Live-verified:** `prepare neura_q2_board.xlsx` → mode document-prep, bottom-line-first briefing,
+  **every figure attributed to the source file with exact numbers** (no hallucination), blueprint
+  `.md` written. Tests: +9 (routing, questions, guidance, briefing, markdown, write, pipeline branch).
+
 ### PHASE 3.5 STATUS: ✅ COMPLETE
-(Code complete, 127 tests green, ruff/mypy clean, pushed. Both LOW and HIGH runs live-verified —
-HIGH: 3 workers · 2 rounds · 133 sources evaluated · critique passed 75/100 · Excel+Brief.)
+(Code complete, 143 tests green, ruff/mypy clean, pushed. Web-research loop: LOW + HIGH
+live-verified. CEO-office document-preparation mode added + live-verified.)
 ---

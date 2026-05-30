@@ -102,7 +102,13 @@ python main.py ask "Was macht Neura Robotics?"
 python main.py research "Figure AI funding 2026"
 python main.py research "humanoid robotics market" --max-fetch 3
 
-# Read a document (PDF / image / .xlsx) and print extracted content
+# Prepare internal documents for management — NO web research (CEO-office mode).
+# Deep-reads the files, consolidates them into one management briefing with zero
+# hallucination (every figure traced to its source), and writes a Markdown blueprint
+# (the cheat-sheet for the final PDF/PPTX) to ./output/.
+python main.py prepare board_pack.pdf q2_financials.xlsx --task "Consolidate for the board"
+
+# Read a single document (PDF / image / .xlsx) and print extracted content (no synthesis)
 python main.py analyze-doc path\to\report.pdf
 python main.py analyze-doc path\to\pipeline.xlsx
 

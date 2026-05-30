@@ -26,6 +26,9 @@ def test_load_playbooks_reads_all_four() -> None:
     assert "Source Authority Ladder" in playbooks.deep_research
     assert "Confidence Model" in playbooks.deep_research
     assert "Recency Windows" in playbooks.deep_research
+    # doc_prep_playbook (Phase 3.5): CEO-office document preparation
+    assert "Zero Hallucination" in playbooks.doc_prep
+    assert "Blueprint" in playbooks.doc_prep
 
 
 def test_load_playbooks_is_cached() -> None:
@@ -47,6 +50,7 @@ def test_empty_playbook_fails_fast(tmp_path: Path) -> None:
         "analysis_playbook.md",
         "output_playbook.md",
         "deep_research_playbook.md",
+        "doc_prep_playbook.md",
     ):
         (tmp_path / name).write_text("   \n", encoding="utf-8")
     with pytest.raises(PlaybooksError):

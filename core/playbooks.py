@@ -24,6 +24,7 @@ _RESEARCH_FILE = "research_playbook.md"
 _ANALYSIS_FILE = "analysis_playbook.md"
 _OUTPUT_FILE = "output_playbook.md"
 _DEEP_RESEARCH_FILE = "deep_research_playbook.md"  # Phase 3.5 (SPEC §15.5)
+_DOC_PREP_FILE = "doc_prep_playbook.md"  # Phase 3.5 — internal document-preparation mode
 
 
 class PlaybooksError(Exception):
@@ -41,6 +42,7 @@ class Playbooks(BaseModel):
     analysis: str
     output: str
     deep_research: str
+    doc_prep: str
 
 
 def _read_playbook(directory: Path, filename: str) -> str:
@@ -67,6 +69,7 @@ def _load_cached(directory_str: str) -> Playbooks:
         analysis=_read_playbook(directory, _ANALYSIS_FILE),
         output=_read_playbook(directory, _OUTPUT_FILE),
         deep_research=_read_playbook(directory, _DEEP_RESEARCH_FILE),
+        doc_prep=_read_playbook(directory, _DOC_PREP_FILE),
     )
 
 

@@ -26,7 +26,13 @@ from typing import Protocol
 from core.clarification import clarify
 from core.config import AppConfig, EffortLevelConfig
 from core.critic import critique, revise
-from core.intent_parser import parse_intent
+from core.doc_synthesis import (
+    propose_doc_questions,
+    synthesize_briefing,
+    to_management_markdown,
+    write_briefing_md,
+)
+from core.intent_parser import parse_intent, route_mode
 from core.json_utils import extract_json_array
 from core.memory import load_brain
 from core.playbooks import load_playbooks
@@ -35,7 +41,16 @@ from core.synthesizer import quality_check, synthesize
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent, ResearchReport
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, SynthesisInput
-from models.task import EffortLevel, Intent, Language, OutputFormat, ResearchPlan, TaskRequest
+from models.task import (
+    ClarificationRound,
+    EffortLevel,
+    Intent,
+    Language,
+    OutputFormat,
+    ResearchPlan,
+    TaskRequest,
+    WorkMode,
+)
 
 
 class Interaction(Protocol):
@@ -259,6 +274,61 @@ def _critique_and_revise(
     return analysis, crit, revisions
 
 
+def _run_document_prep(
+    client: LocalLLMClient,
+    config: AppConfig,
+    intent: Intent,
+    documents: list[DocContent],
+    brain: str,
+    interaction: Interaction,
+) -> PipelineResult:
+    """Internal doc-prep mode: deep-read → targeted clarifications → briefing + .md blueprint."""
+    interaction.notify(
+        _t(
+            intent.language,
+            f"Lese {len(documents)} Dokument(e) und erkenne die Themen…",
+            f"Reading {len(documents)} document(s) and identifying the themes…",
+        )
+    )
+    playbooks = load_playbooks()
+
+    # Targeted, theme-specific clarifications (effort-budgeted; fail-open via empty answers).
+    effort_cfg = config.effort.level_for(intent.effort)
+    budget = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
+    answered: list[ClarificationRound] = []
+    guidance_parts: list[str] = []
+    for question in propose_doc_questions(client, intent, documents, budget):
+        answer = interaction.ask_text(question).strip()
+        answered.append(ClarificationRound(question=question, answer=answer or None))
+        if answer:
+            guidance_parts.append(f"Q: {question}\nA: {answer}")
+    guidance = "\n\n".join(guidance_parts)
+    if guidance:
+        interaction.notify(
+            _t(
+                intent.language,
+                "Antworten übernommen — erstelle die Management-Aufbereitung…",
+                "Answers captured — preparing the management briefing…",
+            )
+        )
+
+    analysis = synthesize_briefing(client, intent, documents, brain, playbooks, guidance)
+    markdown = to_management_markdown(analysis, documents, intent.language)
+    path = write_briefing_md(markdown, config.output.output_dir, analysis.title)
+    interaction.notify(
+        _t(intent.language, f"Blueprint geschrieben: {path}", f"Blueprint written: {path}")
+    )
+    return PipelineResult(
+        intent=intent,
+        routed_formats=intent.output_formats,
+        answered=answered,
+        analysis=analysis,
+        effort=intent.effort,
+        mode=WorkMode.DOCUMENT_PREP.value,
+        artifact_path=path,
+    )
+
+
 def run_pipeline(
     client: LocalLLMClient,
     config: AppConfig,
@@ -289,6 +359,12 @@ def run_pipeline(
     """
     brain = load_brain(config.memory)
     intent = parse_intent(client, config, task, brain, effort_override=effort_override)
+
+    docs = documents or []
+    if docs and route_mode(task.raw_input, True, intent.task_type) == WorkMode.DOCUMENT_PREP:
+        # Internal document-preparation mode: no research, no planning — read + consolidate.
+        return _run_document_prep(client, config, intent, docs, brain, interaction)
+
     effort_cfg = config.effort.level_for(intent.effort)
     # Upfront clarification budget = the smaller of the agent ceiling and the effort allowance.
     max_clarifications = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
