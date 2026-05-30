@@ -373,7 +373,10 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        effort.max_clarifications). `analyze --effort` lands in Task 9. (done 2026-05-30 — +7 tests)
 [x] 5. Interaction `ask_text` (protocol + ReplInteraction `Prompt.ask` + AutoInteraction canned/""
        with `asked_text` log) + tests (done 2026-05-30 — +2 tests)
-[ ] 6. ResearchWorker (deep-research loop, source validation, isolated failure) + tests
+[x] 6. ResearchWorker (`core/research_agent.py`): async deep-research loop — craft queries (deep
+       playbook injected) → SearXNG+fetch (reused Phase-2) → LLM extracts dated/sourced/confidence
+       Findings → iterate ≤ max_research_rounds while thin; LLM via `asyncio.to_thread`; fail-open
+       on LLM/parse; SearXNG total-fail propagates (manager decides). +5 tests (done 2026-05-30)
 [ ] 7. ResearchManager (decompose, parallel orchestration, aggregation, mid-research clarification) + tests
 [ ] 8. Critic + revision (`core/critic.py`, effort-gated, source-validation rubric, fail-open) + tests
 [ ] 9. Pipeline + presentation (full master loop wiring; render_result telemetry; `analyze --effort`;
