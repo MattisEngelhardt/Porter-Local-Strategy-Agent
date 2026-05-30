@@ -84,7 +84,14 @@ class Intent(BaseModel):
 
 
 class ClarificationRound(BaseModel):
-    """One clarification turn (max 2 per task, SPEC §5.2)."""
+    """One clarification turn (max 3 per task — user-authorized override of SPEC §5.2)."""
 
     question: str
     answer: str | None = None
+
+
+class ResearchPlan(BaseModel):
+    """Decomposed research plan: 3-5 concrete sub-questions + a confirm summary (SPEC §5.3)."""
+
+    sub_questions: list[str] = Field(default_factory=list)
+    summary: str = ""  # the bilingual "N Suchanfragen, … ~25 Min. Los?" confirmation line

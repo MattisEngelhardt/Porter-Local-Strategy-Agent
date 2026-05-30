@@ -8,7 +8,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from models.research import DocContent, FetchedContent, SourceTier
-from models.task import Intent, Language, OutputFormat
+from models.task import ClarificationRound, Intent, Language, OutputFormat
 
 
 class Section(BaseModel):
@@ -46,3 +46,18 @@ class AnalysisOutput(BaseModel):
     sections: list[Section] = Field(default_factory=list)
     sources: list[SourceRef] = Field(default_factory=list)
     recommended_formats: list[OutputFormat] = Field(default_factory=list)
+
+
+class PipelineResult(BaseModel):
+    """Outcome of one full agent run (Phase 3). No files are rendered yet (Phase 4).
+
+    Either ``analysis`` (full research run) is present, or ``declined`` is True with a
+    ``quick_answer`` (the user declined the research plan and got a brain-based short answer).
+    """
+
+    intent: Intent
+    routed_formats: list[OutputFormat] = Field(default_factory=list)
+    answered: list[ClarificationRound] = Field(default_factory=list)
+    analysis: AnalysisOutput | None = None
+    declined: bool = False
+    quick_answer: str | None = None
