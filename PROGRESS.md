@@ -367,8 +367,10 @@ recorded in SPEC §15.5 + WORKFLOW §2.
 [x] 3. Deep-research playbook: authored `playbooks/deep_research_playbook.md` (**USER REVIEW
        PENDING** — authored content per RULE 14) + extended `Playbooks` loader (4th file,
        fail-fast) + tests (done 2026-05-30 — Playbooks.deep_research; test_playbooks +2)
-[ ] 4. Effort detection + override: `detect_effort` in intent_parser + `parse_effort_override`
-       (`/effort` REPL) + `analyze --effort` + clarification budget from effort + tests
+[x] 4. Effort detection + override: `detect_effort` (keyword booster + LLM hint + task-type floor,
+       default HIGH) + `parse_effort_override` (`/effort` prefix) in intent_parser; classifier emits
+       an effort hint; `parse_intent(effort_override=…)`; pipeline clarify budget = min(agent rounds,
+       effort.max_clarifications). `analyze --effort` lands in Task 9. (done 2026-05-30 — +7 tests)
 [ ] 5. Interaction `ask_text` (protocol + ReplInteraction + AutoInteraction) + tests
 [ ] 6. ResearchWorker (deep-research loop, source validation, isolated failure) + tests
 [ ] 7. ResearchManager (decompose, parallel orchestration, aggregation, mid-research clarification) + tests

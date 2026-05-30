@@ -10,13 +10,15 @@ from typing import Any
 
 from core.config import AgentConfig, AppConfig
 from core.intent_parser import (
+    detect_effort,
     detect_explicit_formats,
     detect_language,
+    parse_effort_override,
     parse_intent,
     route_outputs,
 )
 from llm.local_llm_client import LLMError
-from models.task import Depth, Language, OutputFormat, TaskRequest, TaskType
+from models.task import Depth, EffortLevel, Language, OutputFormat, TaskRequest, TaskType
 
 
 class _FakeClient:
@@ -142,3 +144,74 @@ def test_parse_intent_config_language_override() -> None:
     config = AppConfig(agent=AgentConfig(default_language="de"))
     intent = parse_intent(client, config, _task("quick humanoid robotics news"))  # type: ignore[arg-type]
     assert intent.language == Language.DE
+
+
+# -------------------------------------------------------------- effort (Phase 3.5)
+def test_detect_effort_keyword_wins() -> None:
+    """Explicit user words pin the effort (ULTRA beats LOW), over any LLM suggestion."""
+    assert detect_effort("Vollständige Analyse von 1X", TaskType.ADHOC, None) == EffortLevel.ULTRA
+    assert detect_effort("deep dive on Figure AI", TaskType.ADHOC, EffortLevel.LOW) == (
+        EffortLevel.ULTRA
+    )
+    assert detect_effort("quick overview of the market", TaskType.ADHOC, None) == EffortLevel.LOW
+    assert detect_effort("kurzer Überblick bitte", TaskType.ADHOC, None) == EffortLevel.LOW
+
+
+def test_detect_effort_task_floor_and_default() -> None:
+    """Heavy task types floor at HIGH; unsure defaults to HIGH (never shallow)."""
+    # Business case with an LLM 'low' suggestion is floored up to HIGH.
+    assert detect_effort("build a business case", TaskType.BUSINESS_CASE, EffortLevel.LOW) == (
+        EffortLevel.HIGH
+    )
+    # A light task with no signal and no suggestion → HIGH default.
+    assert detect_effort("tell me about Figure AI", TaskType.COMPETITOR_ANALYSIS, None) == (
+        EffortLevel.HIGH
+    )
+    # A valid LLM suggestion is honored when no keyword / floor pushes higher.
+    assert detect_effort("latest news", TaskType.INDUSTRY_NEWS, EffortLevel.LOW) == EffortLevel.LOW
+    # Floor + higher suggestion → the higher wins.
+    assert detect_effort("screen these", TaskType.TARGET_SCREENING, EffortLevel.ULTRA) == (
+        EffortLevel.ULTRA
+    )
+
+
+def test_parse_effort_override() -> None:
+    """A leading /effort token is stripped and wins; plain text is untouched."""
+    level, rest = parse_effort_override("/effort ultra Analyze 1X Technologies")
+    assert level == EffortLevel.ULTRA
+    assert rest == "Analyze 1X Technologies"
+
+    level2, rest2 = parse_effort_override("/EFFORT low quick market check")
+    assert level2 == EffortLevel.LOW
+    assert rest2 == "quick market check"
+
+    none, original = parse_effort_override("just a normal task")
+    assert none is None
+    assert original == "just a normal task"
+
+
+def test_parse_intent_effort_override_wins() -> None:
+    """An explicit effort_override beats both the LLM hint and auto-detection."""
+    client = _FakeClient(
+        '{"task_type":"competitor_analysis","depth":"standard","effort":"low","audience":null,"summary":"x"}'  # noqa: E501
+    )
+    intent = parse_intent(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _task("tell me about Figure AI"),
+        effort_override=EffortLevel.ULTRA,
+    )
+    assert intent.effort == EffortLevel.ULTRA
+
+
+def test_parse_intent_effort_from_llm_hint() -> None:
+    """With no override/keyword, the LLM effort hint flows into the intent."""
+    client = _FakeClient(
+        '{"task_type":"competitor_analysis","depth":"standard","effort":"ultra","audience":null,"summary":"x"}'  # noqa: E501
+    )
+    intent = parse_intent(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _task("analyze Figure AI"),
+    )
+    assert intent.effort == EffortLevel.ULTRA

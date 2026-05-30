@@ -18,7 +18,16 @@ from typing import Any, TypeVar
 from core.config import AppConfig
 from core.json_utils import extract_json_object
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.task import Audience, Depth, Intent, Language, OutputFormat, TaskRequest, TaskType
+from models.task import (
+    Audience,
+    Depth,
+    EffortLevel,
+    Intent,
+    Language,
+    OutputFormat,
+    TaskRequest,
+    TaskType,
+)
 
 # --- language detection ------------------------------------------------------------------
 # German function words (no umlaut) — umlauts/ß are detected separately and are decisive.
@@ -182,6 +191,125 @@ def route_outputs(
     return list(_OUTPUT_ROUTE.get(task_type, [OutputFormat.BRIEF]))
 
 
+# --- effort detection + override (Phase 3.5, SPEC §15.5) ---------------------------------
+# Effort ordering for "take the higher of" combinations.
+_EFFORT_ORDER: dict[EffortLevel, int] = {
+    EffortLevel.LOW: 0,
+    EffortLevel.HIGH: 1,
+    EffortLevel.ULTRA: 2,
+}
+
+# Explicit user words that pin the effort (the user's words win over inference).
+_ULTRA_KEYWORDS = (
+    "ultra",
+    "vollständig",
+    "vollstaendig",
+    "umfassend",
+    "tiefgehend",
+    "tiefe analyse",
+    "in die tiefe",
+    "deep dive",
+    "deep-dive",
+    "deepdive",
+    "in-depth",
+    "in depth",
+    "exhaustive",
+    "comprehensive",
+    "thorough",
+    "gründlich",
+    "gruendlich",
+    "detaillierte analyse",
+    "sehr detailliert",
+)
+_LOW_KEYWORDS = (
+    "quick",
+    "schnell",
+    "kurz",
+    "kurzer",
+    "kurze",
+    "kurzen",
+    "überblick",
+    "ueberblick",
+    "overview",
+    "tl;dr",
+    "tldr",
+    "in a nutshell",
+    "auf die schnelle",
+)
+
+# Task types heavy enough to floor effort at HIGH (never run shallow even if unsure).
+_HIGH_FLOOR_TASKS = frozenset(
+    {
+        TaskType.TARGET_SCREENING,
+        TaskType.BUSINESS_CASE,
+        TaskType.BOARD_PREP,
+        TaskType.FINANCIAL_BENCHMARK,
+        TaskType.PARTNERSHIP_EVALUATION,
+        TaskType.MARKET_ANALYSIS,
+        TaskType.STRATEGIC_INITIATIVE,
+    }
+)
+
+_EFFORT_OVERRIDE_RE = re.compile(r"^\s*/effort\s+(low|high|ultra)\b[\s:,-]*", re.IGNORECASE)
+
+
+def _coerce_effort(value: object) -> EffortLevel | None:
+    """Coerce a raw value (LLM hint / token) into :class:`EffortLevel` or ``None``."""
+    if isinstance(value, str):
+        try:
+            return EffortLevel(value.strip().lower())
+        except ValueError:
+            return None
+    return None
+
+
+def _effort_keyword(text: str) -> EffortLevel | None:
+    """Return the effort a user pinned with explicit words (ULTRA beats LOW), or ``None``."""
+    lowered = text.lower()
+    if any(kw in lowered for kw in _ULTRA_KEYWORDS):
+        return EffortLevel.ULTRA
+    if any(kw in lowered for kw in _LOW_KEYWORDS):
+        return EffortLevel.LOW
+    return None
+
+
+def _higher(a: EffortLevel, b: EffortLevel) -> EffortLevel:
+    """Return the more intensive of two effort levels."""
+    return a if _EFFORT_ORDER[a] >= _EFFORT_ORDER[b] else b
+
+
+def detect_effort(
+    task_text: str, task_type: TaskType, llm_suggestion: EffortLevel | None
+) -> EffortLevel:
+    """Auto-detect the effort level (master dial) for a task (SPEC §15.5).
+
+    Precedence: an explicit user keyword (``ultra``/``vollständig`` → ULTRA; ``quick``/``kurz`` →
+    LOW) wins. Otherwise the LLM's suggestion is combined with a task-type floor (heavy task types
+    floor at HIGH). When nothing is clear, default to **HIGH** — never silently shallow (RULE 9).
+    """
+    keyword = _effort_keyword(task_text)
+    if keyword is not None:
+        return keyword
+
+    floor = EffortLevel.HIGH if task_type in _HIGH_FLOOR_TASKS else None
+    if llm_suggestion is None:
+        return floor or EffortLevel.HIGH
+    return _higher(llm_suggestion, floor) if floor is not None else llm_suggestion
+
+
+def parse_effort_override(text: str) -> tuple[EffortLevel | None, str]:
+    """Strip a leading ``/effort low|high|ultra`` token (REPL/CLI), returning (level, rest).
+
+    Explicit override always wins over auto-detection. With no valid token the text is returned
+    unchanged and the level is ``None``.
+    """
+    match = _EFFORT_OVERRIDE_RE.match(text)
+    if match is None:
+        return None, text
+    level = _coerce_effort(match.group(1))
+    return level, text[match.end() :].strip()
+
+
 # --- LLM classification ------------------------------------------------------------------
 _E = TypeVar("_E", bound=StrEnum)
 
@@ -207,10 +335,13 @@ Allowed task_type:
 
 Allowed depth: quick | standard | deep
 Allowed audience: ceo_board | strategy_team | personal | null
+Allowed effort: low | high | ultra — how much research effort the task warrants. low = a quick \
+fact/news lookup; high = a normal multi-angle analysis; ultra = an exhaustive deep-dive across \
+many angles. Default to high when unsure.
 {brain_block}
 Respond with ONLY a JSON object, no prose:
-{{"task_type": "...", "depth": "...", "audience": "..." or null, "summary": "one short \
-sentence restating the task"}}"""
+{{"task_type": "...", "depth": "...", "effort": "...", "audience": "..." or null, "summary": \
+"one short sentence restating the task"}}"""
 
 
 def _coerce_enum(enum_cls: type[_E], value: object, default: _E) -> _E:
@@ -249,19 +380,25 @@ def _classify(client: LocalLLMClient, raw_input: str, brain: str) -> dict[str, A
 
 
 def parse_intent(
-    client: LocalLLMClient, config: AppConfig, task: TaskRequest, brain: str = ""
+    client: LocalLLMClient,
+    config: AppConfig,
+    task: TaskRequest,
+    brain: str = "",
+    effort_override: EffortLevel | None = None,
 ) -> Intent:
     """Parse a raw request into a structured :class:`Intent`.
 
-    Language is heuristic (robust). The task type / depth / audience come from one fast LLM
-    classification call; output formats are derived deterministically (SPEC §5.4). On any LLM
-    or parse failure, conservative defaults are used (ADHOC / STANDARD / brief).
+    Language is heuristic (robust). The task type / depth / audience / effort hint come from one
+    fast LLM classification call; output formats are derived deterministically (SPEC §5.4) and the
+    effort master dial is resolved by :func:`detect_effort` (or forced by ``effort_override``). On
+    any LLM or parse failure, conservative defaults are used (ADHOC / STANDARD / HIGH / brief).
 
     Args:
         client: The LLM client (classification uses ``use_thinking=False``).
         config: The application config (``agent.default_language`` can force the language).
-        task: The raw request.
+        task: The raw request (with any ``/effort`` prefix already stripped by the caller).
         brain: Optional brain.md context to help infer audience/focus.
+        effort_override: An explicit effort (``/effort`` / ``--effort``) that wins over auto-detect.
 
     Returns:
         A fully populated :class:`Intent`.
@@ -274,12 +411,16 @@ def parse_intent(
     audience = _coerce_audience(data.get("audience"))
     summary = str(data.get("summary") or "").strip()
     explicit = detect_explicit_formats(task.raw_input)
+    effort = effort_override or detect_effort(
+        task.raw_input, task_type, _coerce_effort(data.get("effort"))
+    )
 
     return Intent(
         task_type=task_type,
         output_formats=route_outputs(task_type, explicit),
         language=language,
         depth=depth,
+        effort=effort,
         audience=audience,
         summary=summary,
     )

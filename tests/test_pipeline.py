@@ -11,7 +11,7 @@ from typing import Any
 from core.config import AppConfig
 from core.pipeline import AutoInteraction, plan_subqueries, run_pipeline
 from models.research import FetchedContent, ResearchBundle
-from models.task import Intent, Language, OutputFormat, TaskRequest, TaskType
+from models.task import EffortLevel, Intent, Language, OutputFormat, TaskRequest, TaskType
 
 
 class _ScriptedClient:
@@ -151,6 +151,25 @@ def test_run_pipeline_preserves_german() -> None:
     assert result.intent.language == Language.DE
     assert result.analysis is not None
     assert result.analysis.language == Language.DE
+
+
+def test_run_pipeline_low_effort_caps_clarifications() -> None:
+    """A low-effort task tightens the clarification budget (effort master dial drives it)."""
+    client = _ScriptedClient(
+        intent='{"task_type":"competitor_analysis","depth":"quick","audience":null,"summary":"x"}',
+        subqueries='["a"]',
+        analysis='{"title":"t","bottom_line":"b","sections":[],"sources":[]}',
+    )
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        TaskRequest(raw_input="quick competitor overview of Figure AI"),
+        AutoInteraction(),
+        engine=_FakeEngine(_bundle()),  # type: ignore[arg-type]
+    )
+    assert result.intent.effort == EffortLevel.LOW  # "quick"/"overview" → low
+    # low.max_clarifications == 1, so at most one question is asked (vs. 2 at high).
+    assert len(result.answered) <= 1
 
 
 # ------------------------------------------------------------ sub-queries

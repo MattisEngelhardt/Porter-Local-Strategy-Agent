@@ -220,9 +220,10 @@ def run_pipeline(
     """
     brain = load_brain(config.memory)
     intent = parse_intent(client, config, task, brain)
-    intent, answered = clarify(
-        intent, task, interaction.ask_choice, config.agent.max_clarification_rounds
-    )
+    effort_cfg = config.effort.level_for(intent.effort)
+    # Upfront clarification budget = the smaller of the agent ceiling and the effort allowance.
+    max_clarifications = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
+    intent, answered = clarify(intent, task, interaction.ask_choice, max_clarifications)
     plan = plan_subqueries(client, config, intent, task)
 
     confirmed = interaction.confirm(plan.summary) if config.agent.show_research_plan else True
