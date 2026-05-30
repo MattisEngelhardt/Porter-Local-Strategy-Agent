@@ -106,21 +106,90 @@
 ## PHASE 2 — Research Engine + Document Reading
 **Executed by**: Opus (claude-opus-4-8)
 **Date**: 2026-05-30
-**Session status**: IN PROGRESS
+**Session status**: COMPLETE
 
 ### Phase Plan (created at session start)
-[ ] 1. Install Phase-2 deps into .venv (aiohttp, trafilatura, diskcache, pdfplumber, pytesseract, Pillow, pandas, openpyxl)
-[ ] 2. Research engine: models (RankedResult, ResearchBundle) + core/researcher.py (SearXNGClient, ContentFetcher, tier/dedup/rank, diskcache, ResearchEngine) + check_searxng startup + `research` CLI + tests
-[ ] 3. core/excel_reader.py (pandas) + tests (real tiny .xlsx)
-[ ] 4. LocalLLMClient `images` param + core/pdf_reader.py (pdfplumber → OCR → vision) + tests (mocked)
-[ ] 5. REPL file-path detection in intake.py + `analyze-doc` CLI + tests
-[ ] 6. Quality gate: ruff + mypy --strict + full pytest
-[ ] 7. README + PROGRESS handoff + git commits + push
+[x] 1. Install Phase-2 deps into .venv (aiohttp, trafilatura, diskcache, pdfplumber, pytesseract, Pillow, pandas, openpyxl) (done)
+[x] 2. Research engine: models (RankedResult, ResearchBundle) + core/researcher.py (SearXNGClient, ContentFetcher, tier/dedup/rank, diskcache, ResearchEngine) + check_searxng startup + `research` CLI + tests (done — 10 pass + 1 live skip)
+[x] 3. core/excel_reader.py (pandas) + tests (done — 3 pass)
+[x] 4. LocalLLMClient `images` param + core/pdf_reader.py (pdfplumber → OCR → vision) + tests (done — 8 + 2 pass)
+[x] 5. REPL file-path detection in intake.py + `analyze-doc` CLI + tests (done — 3 pass)
+[x] 6. Quality gate: ruff + mypy --strict + full pytest (done — 44 pass / 1 skip, mypy clean 16 files)
+[x] 7. README + PROGRESS handoff + git commits + push (done — this commit)
 
 ### Estimated scope: Medium-Large (research engine + 2 document readers + vision)
+
 ### Runtime reality at session start (read-only checks)
 - Ollama: ✅ HTTP 200. Docker/SearXNG: ❌ not installed (`:8080` down). Tesseract: ❌ not on PATH. Phase-2 pip pkgs: ❌ not installed.
 - Decision (confirmed with user): build full Phase 2, unit-test fully offline (mocked), fail-fast with exact setup instructions. Live web/OCR verification deferred until user installs Docker Desktop + Tesseract.
 
-### PHASE 2 STATUS: ⏳ IN PROGRESS
+### Key Technical Decisions Made
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Async transport | **aiohttp** (not httpx.AsyncClient) | SPEC §6 + requirements.txt name aiohttp for parallel research. trafilatura runs in a thread (`asyncio.to_thread`) on aiohttp-fetched HTML so the event loop never blocks. |
+| Search cache | diskcache (SQLite) at `./data/cache/`, TTL = `cache_ttl_hours` | SPEC §4.4 names diskcache+SQLite+24h, not a path; `data/` is gitignored. Keyed on normalized (lowercase/trim) query. |
+| Source tiers | Domain→tier classifier (Tier-1/2/3 from research_playbook); unknown → Tier 3 | Deterministic + offline-testable. `rank_score = tier_weight + score/10` so tier dominates, SearXNG score breaks ties. |
+| Vision fallback | Added `images` param to `LocalLLMClient.generate()` (Ollama native `message.images` base64); non-Ollama + images → `LLMError` | Keeps RULE 6 (all LLM via the client). Default backend is Ollama/gemma4, which is the vision path SPEC §4.3 assumes. |
+| `analyze-doc` / REPL doc handling | **Extraction only**, no LLM synthesis | Phase 2 must NOT implement the Phase 3 reasoning chain. Vision uses the LLM only to transcribe image PDFs (extraction, not reasoning). |
+| Per-query failure tolerance | `search_many` returns `[]` for a failed query; raises `SearXNGError` only if **all** fail | One dead engine shouldn't kill a run; total failure is a real fail-fast condition. |
+| docx reading | **Deferred** | SPEC §7 names only `pdf_reader.py` + `excel_reader.py`; docx is not a Phase-2 success criterion. python-docx left uninstalled. |
+
+### What Was Built (Completed Tasks)
+- **models/research.py**: added `RankedResult` (extends `SearchResult` with `tier` + `rank_score`) and `ResearchBundle` (query, sub_queries, ranked results, fetched content, `from_cache`).
+- **core/researcher.py** (new): `SearXNGClient` (async JSON search, parallel `search_many` bounded by `parallel_queries`), `ContentFetcher` (aiohttp + trafilatura, parallel, drops failures), pure helpers `classify_tier` / `dedup_results` / `rank_results`, `SearchCache` (diskcache), `ResearchEngine.run()` orchestrator (cache-aware search → dedup → rank → fetch top-N). `SearXNGError` for fail-fast.
+- **core/excel_reader.py** (new): `read_excel()` → pandas reads all sheets → structured text summary (sheet name, shape, columns, CSV preview); `ExcelReadError` on parse failure.
+- **core/pdf_reader.py** (new): `read_pdf(path, llm=None)` cascade pdfplumber → pytesseract OCR → gemma4 vision; standalone images (.png/.jpg/…) supported; `PdfReadError` / `TesseractNotInstalledError` fail-fast. Backend steps are small seams (`_extract_text_pdfplumber`, `_render_pdf_pages`, `_open_image`, `_ocr_pages`, `_vision_pages`) so tests stub them.
+- **llm/local_llm_client.py**: `generate(..., images=...)` attaches base64 images to the Ollama user message; non-Ollama + images raises `LLMError`. `_build_messages` now returns `list[dict[str, Any]]`.
+- **core/startup.py**: `check_searxng()` — distinct fail-fast messages for "unreachable" (Docker) vs "not JSON" (enable formats in settings.yml).
+- **core/intake.py**: `detect_file_path()` (bare/quoted path to supported doc), `read_document()` dispatcher (xlsx→excel, else pdf), `render_document()` panel; REPL routes dropped paths to the reader. Phase-2 TODO removed; only the Phase-5 voice TODO remains.
+- **main.py**: `research "<query>" [--max-fetch N]` (SearXNG check → engine → ranked rich table + summary) and `analyze-doc <path>` (read → render). Factored `_load_config_or_exit`.
+- **pyproject.toml**: mypy override `ignore_missing_imports` extended to trafilatura/diskcache/pdfplumber/pytesseract/pandas (no stub packages added — RULE 3).
+
+### Files Created/Modified
+| File | Status | Key Contents |
+|------|--------|-------------|
+| core/researcher.py | Created | SearXNGClient, ContentFetcher, tier/dedup/rank, SearchCache, ResearchEngine |
+| core/excel_reader.py | Created | read_excel (pandas input mode) |
+| core/pdf_reader.py | Created | pdfplumber → OCR → vision cascade |
+| models/research.py | Modified | + RankedResult, ResearchBundle |
+| llm/local_llm_client.py | Modified | + images/vision (Ollama) |
+| core/startup.py | Modified | + check_searxng |
+| core/intake.py | Modified | + file-path detection / read_document / render_document |
+| main.py | Modified | + research + analyze-doc commands |
+| pyproject.toml | Modified | mypy overrides for new stubless libs |
+| tests/test_researcher.py | Created | 11 tests (10 offline + 1 live skip) |
+| tests/test_excel_reader.py | Created | 3 tests |
+| tests/test_pdf_reader.py | Created | 8 tests |
+| tests/test_intake.py | Created | 3 tests |
+| tests/test_local_llm_client.py | Modified | + 2 vision tests |
+| README.md | Modified | Phase 2 setup (Docker/SearXNG JSON, Tesseract) + new commands |
+
+### Implementation Gaps Encountered (from SPEC)
+- **SearXNG JSON format**: the default SearXNG docker image ships JSON output disabled. Documented in README + `check_searxng` fix message (`search.formats: [html, json]`). Not a code issue.
+- **pdfplumber page rendering for OCR/vision** (`_render_pdf_pages` via `page.to_image().original`) is implemented but **untested live** (no Tesseract, no scanned PDF this session). Unit tests stub the seam. Verify when Tesseract is installed.
+- **docx**: deferred (see decisions).
+
+### Tests Status
+- test_config.py: ✅ 6/6 · test_local_llm_client.py: ✅ 14/14 (incl. live LLM) · test_researcher.py: ✅ 10/10 + 1 live skip · test_excel_reader.py: ✅ 3/3 · test_pdf_reader.py: ✅ 8/8 · test_intake.py: ✅ 3/3
+- **Total: 44 passed, 1 skipped (live SearXNG).** ruff format/check: clean. mypy --strict (core llm models main.py): clean, 16 files.
+
+### Git Log (this session)
+- phase-2: research engine (SearXNG client, fetcher, rank/dedup, 24h cache) + research CLI + SearXNG startup check + tests
+- phase-2: excel_reader (pandas input mode) + tests
+- phase-2: pdf_reader (pdfplumber -> OCR -> vision cascade) + LLM images/vision support + tests
+- phase-2: REPL file-path detection + analyze-doc CLI + tests (ruff/mypy --strict clean, 44 pass)
+- phase-2: README + Phase 2 handoff (this commit)
+
+### Known Issues / Technical Debt
+- Live `research` and OCR/vision paths are **unverified** (Docker + Tesseract not installed this session). Offline tests + fail-fast cover them; first live run is the next session's first job.
+- `analyze-doc` bootstraps the LLM (for the vision fallback), so it needs Ollama up even to read a text-only PDF/xlsx. Acceptable (agent assumes a local LLM); could be made lazy later.
+- trafilatura currently extracts text only (no title/metadata) → `FetchedContent.title` stays None. Fine for Phase 2; enrich in Phase 3 if synthesis needs it.
+- Cache stores per-query results; whole-run `from_cache` is True only if every sub-query hit. Good enough; no per-query reporting yet.
+
+### What to do FIRST next session (Phase 3 starting point)
+1. Run `python -m pytest tests/ -v` — verify 44 pass / 1 skip (or more if SearXNG is now up).
+2. **Verify Phase 2 live** (if user has installed Docker + Tesseract): `docker compose up -d`, enable JSON format, then `python main.py research "Figure AI funding 2026"` → ranked results; `python main.py analyze-doc <scanned.pdf>` → OCR/vision text. Document the result.
+3. Begin Phase 3 (SPEC §15): `core/intent_parser.py`, `core/clarification.py`, `core/memory.py` (brain.md inject — read only), the three `playbooks/*.md`, and the multi-step reasoning chain (SPEC §5.3) wiring intake → clarification → ResearchEngine → synthesis. `ResearchEngine.run(query, sub_queries=...)` already accepts decomposed sub-queries from the planner.
+
+### PHASE 2 STATUS: ✅ COMPLETE
 ---
