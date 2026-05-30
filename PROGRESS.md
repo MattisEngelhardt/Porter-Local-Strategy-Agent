@@ -15,8 +15,8 @@
 [x] 3. requirements.txt (full, per WORKFLOW §6) + .venv + install Phase 1 core subset (done)
 [x] 4. All models/*.py Pydantic v2 types (task, research, synthesis, deck, workbook) (done)
 [x] 5. llm/local_llm_client.py (provider-aware) + tests/test_local_llm_client.py (done — 12 unit + 1 live, all pass)
-[ ] 6. core/startup.py health checks + core/intake.py REPL
-[ ] 7. main.py (typer: `ask` + REPL), wiring config → startup checks → client
+[x] 6. core/startup.py health checks + core/intake.py REPL (done)
+[x] 7. main.py (typer: `ask` + REPL), wiring config → startup checks → client (done — gate verified)
 [ ] 8. docker-compose.yml + README.md
 [ ] 9. ruff format + ruff check --fix; mypy --strict on llm/ + models/ + core/config.py
 [ ] 10. Verify success gate; write full Phase 1 handoff (this file)
