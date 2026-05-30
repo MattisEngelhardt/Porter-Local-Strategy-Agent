@@ -14,7 +14,7 @@
 [x] 2. config.yaml (SPEC §8) + core/config.py loader + tests/test_config.py (done — 6/6 pass)
 [x] 3. requirements.txt (full, per WORKFLOW §6) + .venv + install Phase 1 core subset (done)
 [x] 4. All models/*.py Pydantic v2 types (task, research, synthesis, deck, workbook) (done)
-[ ] 5. llm/local_llm_client.py (provider-aware) + tests/test_local_llm_client.py
+[x] 5. llm/local_llm_client.py (provider-aware) + tests/test_local_llm_client.py (done — 12 unit + 1 live, all pass)
 [ ] 6. core/startup.py health checks + core/intake.py REPL
 [ ] 7. main.py (typer: `ask` + REPL), wiring config → startup checks → client
 [ ] 8. docker-compose.yml + README.md
