@@ -371,7 +371,8 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        default HIGH) + `parse_effort_override` (`/effort` prefix) in intent_parser; classifier emits
        an effort hint; `parse_intent(effort_override=…)`; pipeline clarify budget = min(agent rounds,
        effort.max_clarifications). `analyze --effort` lands in Task 9. (done 2026-05-30 — +7 tests)
-[ ] 5. Interaction `ask_text` (protocol + ReplInteraction + AutoInteraction) + tests
+[x] 5. Interaction `ask_text` (protocol + ReplInteraction `Prompt.ask` + AutoInteraction canned/""
+       with `asked_text` log) + tests (done 2026-05-30 — +2 tests)
 [ ] 6. ResearchWorker (deep-research loop, source validation, isolated failure) + tests
 [ ] 7. ResearchManager (decompose, parallel orchestration, aggregation, mid-research clarification) + tests
 [ ] 8. Critic + revision (`core/critic.py`, effort-gated, source-validation rubric, fail-open) + tests

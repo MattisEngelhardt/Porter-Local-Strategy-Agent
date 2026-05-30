@@ -113,3 +113,16 @@ def test_repl_interaction_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
     """confirm delegates to rich Confirm and returns its boolean."""
     monkeypatch.setattr(intake.Confirm, "ask", lambda *a, **k: False)
     assert ReplInteraction(_capture_console(), "cyan").confirm("Go?") is False
+
+
+def test_repl_interaction_ask_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ask_text shows the mid-research question and returns the user's free-form answer."""
+    console = _capture_console()
+    monkeypatch.setattr(intake.Prompt, "ask", lambda *a, **k: "  industrial segment  ")
+    interaction = ReplInteraction(console, "cyan")
+    assert interaction.ask_text("Which 1X do you mean — robotics or payments?") == (
+        "industrial segment"
+    )
+    out = console.file.getvalue()  # type: ignore[attr-defined]
+    assert "mid-research" in out
+    assert "Which 1X" in out

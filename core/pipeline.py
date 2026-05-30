@@ -40,6 +40,14 @@ class Interaction(Protocol):
         """Ask a multiple-choice question and return the chosen answer (one word)."""
         ...
 
+    def ask_text(self, question: str) -> str:
+        """Ask a free-form, precise question (mid-research clarification) and return the answer.
+
+        An empty string means "no answer" — the caller should log an assumption and proceed
+        (mid-research clarification must never block delivery).
+        """
+        ...
+
     def confirm(self, prompt: str) -> bool:
         """Ask a yes/no question and return the decision."""
         ...
@@ -55,15 +63,27 @@ class AutoInteraction:
     Used by the non-interactive ``analyze`` CLI command and by tests.
     """
 
-    def __init__(self, answers: list[str] | None = None, accept: bool = True) -> None:
-        """Configure canned clarification answers and the confirm decision."""
+    def __init__(
+        self,
+        answers: list[str] | None = None,
+        accept: bool = True,
+        text_answers: list[str] | None = None,
+    ) -> None:
+        """Configure canned clarification + mid-research answers and the confirm decision."""
         self._answers = list(answers or [])
+        self._text_answers = list(text_answers or [])
         self._accept = accept
         self.notes: list[str] = []
+        self.asked_text: list[str] = []  # mid-research questions, inspectable in tests
 
     def ask_choice(self, question: str, options: list[str]) -> str:
         """Return the next canned answer, or the first option if none remain."""
         return self._answers.pop(0) if self._answers else options[0]
+
+    def ask_text(self, question: str) -> str:
+        """Return the next canned free-form answer, or "" (→ caller assumes and proceeds)."""
+        self.asked_text.append(question)
+        return self._text_answers.pop(0) if self._text_answers else ""
 
     def confirm(self, prompt: str) -> bool:
         """Return the preconfigured confirm decision."""

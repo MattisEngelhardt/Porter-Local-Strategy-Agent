@@ -172,6 +172,14 @@ def test_run_pipeline_low_effort_caps_clarifications() -> None:
     assert len(result.answered) <= 1
 
 
+def test_auto_interaction_ask_text() -> None:
+    """AutoInteraction.ask_text replays canned answers then returns "" (assume-and-proceed)."""
+    auto = AutoInteraction(text_answers=["industrial"])
+    assert auto.ask_text("Which segment?") == "industrial"
+    assert auto.ask_text("Anything else?") == ""  # exhausted → empty (caller assumes)
+    assert auto.asked_text == ["Which segment?", "Anything else?"]
+
+
 # ------------------------------------------------------------ sub-queries
 def test_plan_subqueries_parses_and_falls_back() -> None:
     """plan_subqueries parses a JSON array and falls back to the raw task on bad output."""

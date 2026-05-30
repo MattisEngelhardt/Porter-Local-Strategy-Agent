@@ -94,6 +94,16 @@ class ReplInteraction:
             self._console.print(f"  [{self._accent}]{index}[/].  {option}")
         return Prompt.ask("[bold]›[/bold]").strip()
 
+    def ask_text(self, question: str) -> str:
+        """Ask a free-form mid-research question and return the user's typed answer.
+
+        The agent paused research with a precise question; an empty answer lets it proceed on a
+        stated assumption.
+        """
+        self._console.print(f"\n[bold {self._accent}]↯ mid-research question[/]")
+        self._console.print(f"[bold]{question}[/bold]")
+        return Prompt.ask("[bold]›[/bold]").strip()
+
     def confirm(self, prompt: str) -> bool:
         """Ask a yes/no question (defaults to yes)."""
         return Confirm.ask(f"[bold]{prompt}[/bold]", default=True)
