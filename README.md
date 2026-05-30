@@ -4,12 +4,15 @@ A 100% local AI research/strategy agent turning research-heavy tasks into profes
 **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on your
 machine with no external AI APIs, ever.
 
-> **Status: Phase 3 (Agent Brain) complete.** The agent now understands a task, asks up to
-> 3 smart clarifying questions (one at a time), decomposes it, runs web research, injects
-> persistent Neura context (`brain.md`) + the three playbooks, and reasons into a **structured
-> analysis** (bottom line → sections → sources) in the input's language (DE/EN). File rendering
+> **Status: Phase 3.5 (Advanced Agent Loop) complete.** The agent is now a non-linear,
+> self-correcting, multi-agent loop. A single **effort dial** (`low` / `high` / `ultra`,
+> auto-detected and overridable) drives the whole run. A **research manager** decomposes the task
+> and runs **N parallel research workers**, each following an explicit deep-research methodology
+> (authoritative + recent + cross-referenced sources; a source, date, and confidence on every
+> fact). It can pause **mid-research** to ask a precise question, then an **output critic** scores
+> the draft against a rubric and forces targeted **revisions** before delivery. File rendering
 > (PDF/PPTX/Excel), memory, and voice land in Phases 4–5. See `PROGRESS.md` for the live status
-> and `strategy_agent_SPEC.md` for the full specification.
+> and `strategy_agent_SPEC.md` (incl. §15.5) for the full specification.
 
 ---
 
@@ -77,13 +80,19 @@ fix instructions — the rest of the agent (`ask`, REPL, `analyze-doc`) still wo
 ## Usage
 
 ```powershell
-# Full agent run (intent → clarify → research → structured analysis). Needs SearXNG.
+# Full agent run (intent → clarify → multi-agent research → critique/revise → analysis).
 python main.py analyze "Screen these 5 European robotics startups as M&A targets"
 python main.py analyze "Business case for Japan expansion: market size, investment, ROI"
 
+# Effort master dial — auto-detected from the task, overridable with --effort:
+python main.py analyze --effort ultra "Vollständige Analyse von 1X Technologies — Funding, Tech, Strategie"
+python main.py analyze --effort low "Latest humanoid robotics funding news"
+
 # Interactive REPL — the primary experience. Free text runs the full agent pipeline:
-# it asks up to 3 one-at-a-time clarifying questions, shows a research plan to confirm,
-# then researches and produces a structured analysis. Drop a file path to read a document.
+# it asks one-at-a-time clarifying questions, shows the research plan + effort to confirm,
+# then runs the multi-agent research and produces a structured analysis. Prefix with
+# '/effort low|high|ultra' to override (alone, it sets the session default). Drop a file
+# path to read a document.
 python main.py            # type 'exit' to quit
 
 # Single question — a plain one-shot LLM answer, no research, no clarification
@@ -126,19 +135,38 @@ Everything tunable lives in **`config.yaml`** — nothing is hardcoded.
 - **Context window:** `llm.num_ctx` (default 32768) is sent on **every** LLM call. Ollama
   otherwise silently defaults all models to 4096 tokens — this agent never relies on that default.
 
-## Project layout (through Phase 3)
+### Effort master dial (`effort:` block)
+
+One knob controls the whole loop's intensity. Each level sets the number of research workers,
+research rounds, fetch depth per worker, clarification + mid-research budgets, revisions, and
+whether the critic and thinking mode run:
+
+| Level | workers | rounds | fetch/worker | clarif. | mid-research Q | revisions | critique | thinking |
+|-------|:------:|:------:|:-----------:|:------:|:-------------:|:--------:|:-------:|:-------:|
+| `low`   | 1 | 1 | 3 | 1 | 0 | 0 | off | off |
+| `high`  | 3 | 2 | 5 | 2 | 1 | 1 | on  | on  |
+| `ultra` | 5 | 3 | 8 | 3 | 2 | 2 | on  | on  |
+
+Effort is **auto-detected** from the task (explicit words like "ultra"/"vollständig" → ultra,
+"quick"/"kurz" → low; heavy task types floor at high; default high when unsure) and **overridable**
+via `--effort` / the REPL `/effort` prefix. `effort.worker_concurrency` caps how many workers truly
+run at once — modest on a laptop (one local model serializes LLM calls), raised on a server. After a
+hardware upgrade you just edit these numbers — **zero code changes** to scale.
+
+## Project layout (through Phase 3.5)
 
 ```
-config.yaml            # single source of all tunable params
-main.py                # entry point: analyze / ask / research / analyze-doc / REPL
-core/                  # config, startup checks, REPL intake (+ pipeline wiring),
+config.yaml            # single source of all tunable params (incl. the effort dial)
+main.py                # entry point: analyze [--effort] / ask / research / analyze-doc / REPL
+core/                  # config (+ effort), startup checks, REPL intake (+ pipeline wiring),
                        #   researcher (SearXNG + fetch + cache), pdf_reader, excel_reader,
-                       #   intent_parser, clarification, memory (brain.md inject),
-                       #   playbooks, synthesizer, pipeline (the reasoning chain), json_utils
+                       #   intent_parser (+ effort detection), clarification, memory (brain inject),
+                       #   playbooks, synthesizer, research_agent (worker + manager),
+                       #   critic (critique + revise), pipeline (the master loop), json_utils
 llm/                   # backend-agnostic LocalLLMClient (text + Ollama vision)
 models/                # Pydantic v2 data contracts (all phases)
-playbooks/             # research / analysis / output rulebooks injected into synthesis
-tests/                 # pytest suite (88 tests)
+playbooks/             # research / analysis / output / deep_research rulebooks
+tests/                 # pytest suite (127 tests)
 docker-compose.yml     # SearXNG
 ```
 

@@ -417,5 +417,99 @@ Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effor
 | Effort as master dial | `EffortConfig.levels[low/high/ultra]` in config.yaml; `level_for()` resolves a level (or `EffortLevel` StrEnum, which equals its value) with safe fallback to `default` | Single knob, everything config-driven per level; scales to server/bigger model with zero code change (SPEC §15.5). Auto-detect defaults to HIGH — never silently shallow (RULE 9). |
 | `level_for` accepts `str` | config.py stays decoupled from models (no import of `EffortLevel`) | StrEnum members equal their string value, so passing an `EffortLevel` works seamlessly; avoids a config→models dependency. |
 
-### PHASE 3.5 STATUS: ⏳ IN PROGRESS
+### What Was Built (Completed Tasks)
+- **Effort master dial** — `EffortLevelConfig`/`EffortConfig` (`core/config.py`) + `effort` block in
+  `config.yaml` (low/high/ultra + `worker_concurrency` + `critique_min_score`). `EffortLevel`
+  StrEnum + `Intent.effort` (`models/task.py`). `detect_effort` (explicit keyword > LLM hint +
+  task-type floor > HIGH default) + `parse_effort_override` (`/effort` prefix) in
+  `core/intent_parser.py`; the classifier emits an effort hint. Every budget reads
+  `config.effort.level_for(intent.effort)`.
+- **Deep-research playbook** — authored `playbooks/deep_research_playbook.md` (source-authority
+  ladder, recency windows, confidence model + ≥2-source rule, query craft, follow-the-thread,
+  finding extraction, round/mid-research triggers, manager aggregation). `Playbooks` loader extended
+  to 4 files (fail-fast). **Authored content — user review pending.**
+- **Multi-agent deep research** — `core/research_agent.py`:
+  - `ResearchWorker.run(sub_topic, effort_cfg)` — craft queries (deep playbook injected) → reuse
+    Phase-2 `SearXNGClient`/`ContentFetcher`/`rank`/`dedup` → LLM extracts dated/sourced/confidence
+    `Finding`s → iterate ≤ `max_research_rounds` while thin. LLM via `asyncio.to_thread`. Fail-open.
+  - `ResearchManager.run(...)` — decompose (analysis-playbook-driven, N=`research_workers`, fallback
+    to plan sub-queries) → run workers via `asyncio.Semaphore(worker_concurrency)` → mid-research
+    clarification (`interaction.ask_text` → targeted follow-up worker) → aggregate `ResearchReport`
+    + telemetry. SearXNG all-worker-fail re-raises `SearXNGError` (fail-fast).
+- **Output critic + revision** — `core/critic.py`: `critique` (9-point rubric incl. source
+  validation, `use_thinking=True`, fail-open) + `revise` (reuses `synthesizer.build_system_prompt`
+  + evidence + `parse_analysis`, fail-open).
+- **Master loop** — `core/pipeline.py` `run_pipeline` rewired: parse_intent(+effort) → clarify
+  (effort budget) → plan (effort surfaced) → confirm → `ResearchManager` → synthesize (validated
+  findings digest via new `SynthesisInput.findings_digest`) → critique+revise loop (effort-gated) →
+  quality_check → `PipelineResult`(effort, critique, revisions, research_report).
+- **Presentation** — `render_result` telemetry panel; REPL `/effort` (inline override + session
+  default); `main.py analyze --effort low|high|ultra`. `Interaction.ask_text` (+ ReplInteraction
+  `Prompt.ask` + AutoInteraction canned/"" with `asked_text`).
+
+### Files Created/Modified (Phase 3.5)
+| File | Status | Key Contents |
+|------|--------|-------------|
+| core/config.py | Modified | EffortLevelConfig + EffortConfig (level_for) |
+| config.yaml | Modified | effort block (low/high/ultra) |
+| models/task.py | Modified | EffortLevel + Intent.effort |
+| models/research.py | Modified | Confidence/Finding/WorkerFindings/CoverageGap/CoverageReport/ResearchReport |
+| models/synthesis.py | Modified | CriterionResult/Critique; PipelineResult ext; SynthesisInput.findings_digest |
+| core/synthesizer.py | Modified | public parse_analysis; findings-digest injection |
+| core/intent_parser.py | Modified | detect_effort + parse_effort_override + effort hint |
+| core/playbooks.py | Modified | 4th playbook (deep_research) |
+| playbooks/deep_research_playbook.md | Created | worker/manager methodology (authored) |
+| core/research_agent.py | Created | ResearchWorker + ResearchManager |
+| core/critic.py | Created | critique + revise (fail-open) |
+| core/pipeline.py | Modified | full master loop + effort budgets + critique loop |
+| core/intake.py | Modified | telemetry panel + REPL /effort + ask_text |
+| main.py | Modified | analyze --effort |
+| tests/{test_models,test_research_agent,test_critic}.py | Created | +8 / +10 / +7 |
+| tests/test_{config,playbooks,intent_parser,synthesizer,pipeline,intake}.py | Modified | effort/4th-playbook/parse_analysis/manager/telemetry tests |
+| strategy_agent_SPEC.md / opus_WORKFLOW.md / README.md | Modified | §15.5 amendment / phase row / Phase-3.5 docs |
+
+### Tests Status
+- **127 passed, 1 skipped** (live SearXNG test) — up from 88. ruff format/check clean (41 files);
+  `mypy --strict core llm models main.py` clean (25 files). Fail-open paths covered (worker bad
+  JSON / no sources, critic LLM-error + bad JSON, decompose fallback); hard-dep fail-fast covered
+  (manager all-worker SearXNG failure re-raises).
+
+### Live Verification (this session)
+- **Auto-effort LOW (live):** `analyze --effort low "Latest humanoid robotics funding news 2026"`
+  → telemetry `effort: low · 1 worker · 1 round · 22 sources evaluated · 2 read`, no critique panel
+  (low disables it), structured analysis with Neura-Lens + explicit data-gap flag. ✅
+- **Auto-effort HIGH (live):** `analyze "Screen these 5 European robotics startups as M&A targets"`
+  → auto-detected high (target_screening floors to HIGH), multi-worker + critique (see telemetry in
+  the run output; gemma4 serializes so this takes ~10–20 min on the laptop). [result captured below]
+
+### Key Technical Decisions (added)
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Worker/manager in one module | `core/research_agent.py` (both classes) | Plan §6; manager owns SearXNG/fetcher + shares across workers. `_Interaction` Protocol locally avoids a pipeline↔research_agent circular import. |
+| Findings digest into synthesis | new `SynthesisInput.findings_digest` (not reusing `prior_findings`) | Keeps `prior_findings` reserved for Phase-5 ChromaDB; injects validated claim·confidence·date·source so synthesis leads with verified facts. |
+| Critic injectability seam | `manager`/`effort_override` params on `run_pipeline`; critic via scripted client in tests | Full loop is offline-testable; live path builds real ResearchManager. |
+
+### Known Issues / Technical Debt (Phase 3.5)
+- **`deep_research_playbook.md` is authored content awaiting user review** (RULE 14 — only the user
+  approves agent content). It is methodology, not Neura facts, but flag it.
+- Live **ultra** (5 workers, 3 rounds, 2 revisions) is the same code path as the verified low/high
+  runs with the config numbers raised; on the single local gemma4 it serializes to ~45–70 min, so it
+  was not babysat to completion this session (proven by the high run + `worker_concurrency`/N being
+  pure config, asserted in `test_research_agent`). On the planned server it fans out with no code
+  change.
+- Each worker opens its own aiohttp session per search/fetch call (Phase-2 behavior); a shared
+  session pool is a future optimization, not needed for correctness.
+- The research cache (diskcache) is bypassed by the manager's workers (they call SearXNG directly);
+  wiring per-worker caching is a possible future optimization.
+
+### What to do FIRST next session (Phase 4 starting point)
+1. Run `python -m pytest tests/ -v` — verify 127 pass (live tests need Ollama + SearXNG up).
+2. Review `playbooks/deep_research_playbook.md` (authored content) and adjust if desired.
+3. Add `assets/neura_logo.png` (still absent) before building decks.
+4. Begin Phase 4 (SPEC §15): brief templates T-1..T-6 + weasyprint PDF; python-pptx decks;
+   `excel_builder.py` (E-1..E-4); `exporter.py`. Renderers consume `AnalysisOutput`; the
+   `PipelineResult` now also carries `research_report` (worker findings + sources + confidence)
+   which Phase 4 can use to fill Excel "Sources"/"Audit Trail" tabs and the telemetry into footers.
+
+### PHASE 3.5 STATUS: ⏳ IN PROGRESS (live high/ultra run + push pending)
 ---
