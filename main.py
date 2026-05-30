@@ -30,7 +30,7 @@ from core.pipeline import AutoInteraction, run_pipeline
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.task import TaskRequest
+from models.task import EffortLevel, TaskRequest
 
 
 def _force_utf8_io() -> None:
@@ -184,11 +184,16 @@ def research(
 def analyze(
     ctx: typer.Context,
     task_text: Annotated[str, typer.Argument(help="The task to research and analyze")],
+    effort: Annotated[
+        EffortLevel | None,
+        typer.Option("--effort", help="Override the effort master dial: low | high | ultra"),
+    ] = None,
 ) -> None:
     """Run the full agent pipeline non-interactively (intent → research → structured analysis).
 
     Clarifications are auto-answered (sensible defaults) and the research plan is auto-confirmed,
-    so this is the scriptable counterpart to the interactive REPL (``python main.py``).
+    so this is the scriptable counterpart to the interactive REPL (``python main.py``). ``--effort``
+    overrides the auto-detected effort level (otherwise it is inferred from the task).
     """
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
@@ -198,7 +203,11 @@ def analyze(
         check_searxng(config)
         with console.status("[dim]analyzing…[/dim]", spinner="dots"):
             result = run_pipeline(
-                client, config, TaskRequest(raw_input=task_text), AutoInteraction()
+                client,
+                config,
+                TaskRequest(raw_input=task_text),
+                AutoInteraction(),
+                effort_override=effort,
             )
     except StartupError as exc:
         console.print(Panel(str(exc), title="startup check failed", border_style="red"))

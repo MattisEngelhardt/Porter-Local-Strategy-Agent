@@ -1,14 +1,17 @@
-"""Agent pipeline (Phase 3): the multi-step reasoning chain (SPEC §5.3) end-to-end.
+"""Agent pipeline (Phase 3 + 3.5): the non-linear, self-correcting reasoning chain end-to-end.
 
-Wires the pieces into one run:
+Wires the master loop (SPEC §5.3 + §15.5):
 
-    decompose → inject brain → clarify (≤3, one at a time) → confirm research plan →
-    search (parallel SearXNG) → fetch top sources → synthesize with playbooks + brain →
-    quality-check → structured AnalysisOutput
+    inject brain → parse intent + AUTO-DETECT effort → clarify (≤ effort budget) →
+    research plan + effort shown → confirm (decline → brain quick answer) →
+    ResearchManager.run(effort): decompose → N parallel workers → mid-research clarification →
+    aggregated ResearchReport → synthesize (brain + playbooks + validated findings digest) →
+    if effort.critique: critique → revise loop (≤ effort.revisions) → re-critique →
+    quality-check (deterministic floor) → PipelineResult (analysis + effort + critique + telemetry)
 
-No output file is rendered (that is Phase 4) and no ChromaDB memory is read/written (Phase 5):
-the decline path's "memory" is brain.md only. Justified addition to the SPEC §7 tree — the SPEC
-describes the reasoning chain but names no orchestrator module (documented in PROGRESS.md).
+Effort is the master dial: it sets every budget via ``config.effort.level_for(intent.effort)``.
+Advisory layers (workers / critic) are fail-open; hard deps (SearXNG all-fail, LLM down) keep the
+Phase-3 fail-fast policy. No output file is rendered (Phase 4); no ChromaDB memory (Phase 5).
 
 Interaction with the user is abstracted behind :class:`Interaction` so the chain is pure and
 testable: the REPL supplies a rich implementation (in ``core/intake.py``), CLI/tests supply the
@@ -21,16 +24,18 @@ import asyncio
 from typing import Protocol
 
 from core.clarification import clarify
-from core.config import AppConfig
+from core.config import AppConfig, EffortLevelConfig
+from core.critic import critique, revise
 from core.intent_parser import parse_intent
 from core.json_utils import extract_json_array
 from core.memory import load_brain
-from core.researcher import ResearchEngine, SearchCache
-from core.synthesizer import synthesize
+from core.playbooks import load_playbooks
+from core.research_agent import ResearchManager
+from core.synthesizer import quality_check, synthesize
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.research import DocContent, ResearchBundle
-from models.synthesis import PipelineResult, SynthesisInput
-from models.task import Depth, Intent, Language, OutputFormat, ResearchPlan, TaskRequest
+from models.research import DocContent, ResearchReport
+from models.synthesis import AnalysisOutput, Critique, PipelineResult, SynthesisInput
+from models.task import EffortLevel, Intent, Language, OutputFormat, ResearchPlan, TaskRequest
 
 
 class Interaction(Protocol):
@@ -100,7 +105,8 @@ _OUTPUT_LABEL = {
     OutputFormat.DECK: "Deck",
     OutputFormat.EXCEL: "Excel",
 }
-_DEPTH_MINUTES = {Depth.QUICK: 12, Depth.STANDARD: 30, Depth.DEEP: 55}
+# Time estimate is derived from effort (the master dial) for display only.
+_EFFORT_MINUTES = {EffortLevel.LOW: 12, EffortLevel.HIGH: 30, EffortLevel.ULTRA: 60}
 
 _SUBQ_SYSTEM = (
     "You decompose a strategy/research task into 3-5 concrete, independently-searchable "
@@ -118,25 +124,30 @@ def _format_labels(formats: list[OutputFormat]) -> str:
     return " + ".join(_OUTPUT_LABEL.get(fmt, fmt.value) for fmt in formats) or "Brief"
 
 
-def _plan_summary(intent: Intent, num_queries: int, max_fetch: int) -> str:
-    """Build the bilingual research-plan confirmation line (SPEC §5.2)."""
-    minutes = _DEPTH_MINUTES.get(intent.depth, 30)
+def _plan_summary(intent: Intent, effort_cfg: EffortLevelConfig) -> str:
+    """Build the bilingual research-plan confirmation line, surfacing the effort (SPEC §15.5)."""
+    minutes = _EFFORT_MINUTES.get(intent.effort, 30)
     outputs = _format_labels(intent.output_formats)
+    workers = effort_cfg.research_workers
+    rounds = effort_cfg.max_research_rounds
+    fetch = effort_cfg.max_fetch_per_worker
     return _t(
         intent.language,
-        f"{num_queries} parallele Suchanfragen, Top-{max_fetch} Quellen lesen, "
-        f"{outputs} erstellen, ~{minutes} Min. Los?",
-        f"{num_queries} parallel searches, read top {max_fetch} sources, "
-        f"produce {outputs}, ~{minutes} min. Go?",
+        f"Effort {intent.effort.value}: {workers} parallele Research-Worker, {rounds} Runden, "
+        f"bis zu {fetch} Quellen je Worker, {outputs} erstellen, ~{minutes} Min. Los?",
+        f"Effort {intent.effort.value}: {workers} parallel research workers, {rounds} rounds, "
+        f"up to {fetch} sources each, produce {outputs}, ~{minutes} min. Go?",
     )
 
 
 def plan_subqueries(
     client: LocalLLMClient, config: AppConfig, intent: Intent, task: TaskRequest
 ) -> ResearchPlan:
-    """Decompose the task into 3-5 sub-queries + a confirm summary (SPEC §5.3 step 1).
+    """Build the confirm summary + fallback sub-queries for the research manager (SPEC §5.3/§15.5).
 
-    Falls back to the raw task as a single query if the LLM fails or returns nothing.
+    The manager owns the real decomposition; these 3-5 sub-queries are its fallback (used if its
+    own decomposition fails) and the basis of the plan the user confirms. Falls back to the raw
+    task as a single query if the LLM fails or returns nothing.
     """
     sub_questions: list[str] = []
     try:
@@ -154,7 +165,7 @@ def plan_subqueries(
         fallback = task.raw_input.strip() or intent.summary
         sub_questions = [fallback] if fallback else []
 
-    summary = _plan_summary(intent, len(sub_questions), config.research.max_fetch_per_run)
+    summary = _plan_summary(intent, config.effort.level_for(intent.effort))
     return ResearchPlan(sub_questions=sub_questions, summary=summary)
 
 
@@ -172,45 +183,80 @@ def _quick_answer(client: LocalLLMClient, task: TaskRequest, brain: str, intent:
         return f"(Could not generate a quick answer: {exc})"
 
 
-def _research(
+def _findings_digest(report: ResearchReport) -> str:
+    """Render the workers' validated findings (claim + confidence + date + source) for synthesis."""
+    lines: list[str] = []
+    for wf in report.worker_findings:
+        if not wf.findings and not wf.gaps:
+            continue
+        lines.append(f"[{wf.sub_topic}] (overall confidence: {wf.confidence.value})")
+        for finding in wf.findings:
+            date = f" ({finding.date})" if finding.date else ""
+            flag = f" [{finding.recency_flag}]" if finding.recency_flag else ""
+            source = f" — {finding.source_url}" if finding.source_url else ""
+            lines.append(f"  - [{finding.confidence.value}] {finding.claim}{date}{flag}{source}")
+        for gap in wf.gaps:
+            lines.append(f"  - GAP: {gap}")
+    return "\n".join(lines)
+
+
+def _run_research(
+    client: LocalLLMClient,
     config: AppConfig,
     intent: Intent,
-    task: TaskRequest,
     plan: ResearchPlan,
-    engine: ResearchEngine | None,
     interaction: Interaction,
-) -> ResearchBundle:
-    """Run the research phase (cache-backed engine unless one is injected)."""
-    query = task.raw_input.strip() or intent.summary
+    effort_cfg: EffortLevelConfig,
+    manager: ResearchManager | None,
+) -> ResearchReport:
+    """Run the multi-agent research via the manager (built from config unless one is injected)."""
+    active = manager or ResearchManager()
+    report = asyncio.run(active.run(client, config, intent, plan, interaction, effort_cfg))
     interaction.notify(
         _t(
             intent.language,
-            f"Recherchiere ({len(plan.sub_questions)} Suchanfragen)…",
-            f"Researching ({len(plan.sub_questions)} searches)…",
+            f"{report.workers_used} Worker, {report.sources_evaluated} Quellen geprüft, "
+            f"{len(report.evidence)} gelesen — synthetisiere…",
+            f"{report.workers_used} workers, {report.sources_evaluated} sources evaluated, "
+            f"{len(report.evidence)} read — synthesizing…",
         )
     )
-    own_cache: SearchCache | None = None
-    active = engine
-    if active is None:
-        own_cache = SearchCache(config.research)
-        active = ResearchEngine(config.research, cache=own_cache)
-    try:
-        bundle = asyncio.run(
-            active.run(
-                query, sub_queries=plan.sub_questions, max_fetch=config.research.max_fetch_per_run
+    return report
+
+
+def _critique_and_revise(
+    client: LocalLLMClient,
+    config: AppConfig,
+    intent: Intent,
+    analysis: AnalysisOutput,
+    synthesis_input: SynthesisInput,
+    interaction: Interaction,
+    effort_cfg: EffortLevelConfig,
+) -> tuple[AnalysisOutput, Critique | None, int]:
+    """Critique the draft and revise it up to ``effort.revisions`` times (effort-gated, fail-open).
+
+    Returns the (possibly revised) analysis, the final critique, and the revision count. When the
+    effort level disables critique, returns the draft unchanged with ``(analysis, None, 0)``.
+    """
+    if not effort_cfg.critique:
+        return analysis, None, 0
+
+    playbooks = load_playbooks()
+    min_score = config.effort.critique_min_score
+    crit = critique(client, intent, analysis, playbooks, min_score)
+    revisions = 0
+    while not crit.passed and revisions < effort_cfg.revisions:
+        interaction.notify(
+            _t(
+                intent.language,
+                f"Kritik {crit.score}/{min_score} — überarbeite (Runde {revisions + 1})…",
+                f"Critique {crit.score}/{min_score} — revising (round {revisions + 1})…",
             )
         )
-    finally:
-        if own_cache is not None:
-            own_cache.close()
-    interaction.notify(
-        _t(
-            intent.language,
-            f"{len(bundle.fetched)} Quellen gelesen, synthetisiere…",
-            f"Read {len(bundle.fetched)} sources, synthesizing…",
-        )
-    )
-    return bundle
+        analysis = revise(client, intent, analysis, crit, synthesis_input, playbooks)
+        revisions += 1
+        crit = critique(client, intent, analysis, playbooks, min_score)
+    return analysis, crit, revisions
 
 
 def run_pipeline(
@@ -218,28 +264,31 @@ def run_pipeline(
     config: AppConfig,
     task: TaskRequest,
     interaction: Interaction,
-    engine: ResearchEngine | None = None,
+    manager: ResearchManager | None = None,
     documents: list[DocContent] | None = None,
+    effort_override: EffortLevel | None = None,
 ) -> PipelineResult:
-    """Run the full agent reasoning chain for one task (SPEC §5.3).
+    """Run the full advanced agent loop for one task (SPEC §5.3 + §15.5).
 
     Args:
         client: The LLM client (all reasoning calls go through it).
-        config: The application config.
-        task: The raw request.
-        interaction: How to ask clarifications / confirm the plan / show progress.
-        engine: Optional research engine (tests inject a stub; otherwise built from config).
+        config: The application config (the ``effort`` block drives every budget).
+        task: The raw request (with any ``/effort`` prefix already stripped by the caller).
+        interaction: How to ask clarifications / mid-research questions / confirm / show progress.
+        manager: Optional research manager (tests inject a stub; otherwise built from config).
         documents: Optional already-read documents to feed into synthesis.
+        effort_override: An explicit effort (``/effort`` / ``--effort``) that beats auto-detect.
 
     Returns:
-        A :class:`PipelineResult` — either a full ``analysis`` or, if the user declined the
-        research plan, ``declined=True`` with a brain-based ``quick_answer``.
+        A :class:`PipelineResult` — either a full ``analysis`` (with effort/critique/revisions/
+        research telemetry) or, if the user declined the research plan, ``declined=True`` with a
+        brain-based ``quick_answer``.
 
     Raises:
-        SearXNGError: If every search fails (fail fast, SPEC REQ-5) — handled by the caller.
+        SearXNGError: If every research worker is starved (fail fast, SPEC REQ-5) — caller-handled.
     """
     brain = load_brain(config.memory)
-    intent = parse_intent(client, config, task, brain)
+    intent = parse_intent(client, config, task, brain, effort_override=effort_override)
     effort_cfg = config.effort.level_for(intent.effort)
     # Upfront clarification budget = the smaller of the agent ceiling and the effort allowance.
     max_clarifications = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
@@ -263,17 +312,32 @@ def run_pipeline(
                 answered=answered,
                 declined=True,
                 quick_answer=quick,
+                effort=intent.effort,
             )
 
-    bundle = _research(config, intent, task, plan, engine, interaction)
+    report = _run_research(client, config, intent, plan, interaction, effort_cfg, manager)
     synthesis_input = SynthesisInput(
         intent=intent,
-        research=bundle.fetched,
+        research=report.evidence,
         documents=documents or [],
         brain_context=brain,
-        prior_findings="",
+        findings_digest=_findings_digest(report),
     )
     analysis = synthesize(client, synthesis_input)
+
+    analysis, crit, revisions = _critique_and_revise(
+        client, config, intent, analysis, synthesis_input, interaction, effort_cfg
+    )
+
+    floor_issues = quality_check(analysis)
+    if floor_issues:
+        interaction.notify(
+            _t(
+                intent.language,
+                f"Hinweis (Qualitäts-Check): {', '.join(floor_issues)}",
+                f"Note (quality check): {', '.join(floor_issues)}",
+            )
+        )
 
     return PipelineResult(
         intent=intent,
@@ -281,4 +345,8 @@ def run_pipeline(
         answered=answered,
         analysis=analysis,
         declined=False,
+        effort=intent.effort,
+        critique=crit,
+        revisions=revisions,
+        research_report=report,
     )

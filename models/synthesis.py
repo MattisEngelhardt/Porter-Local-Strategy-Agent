@@ -34,6 +34,7 @@ class SynthesisInput(BaseModel):
     research: list[FetchedContent] = Field(default_factory=list)
     documents: list[DocContent] = Field(default_factory=list)
     brain_context: str = ""  # injected from brain.md (SPEC §4.5)
+    findings_digest: str = ""  # validated multi-agent findings digest (Phase 3.5)
     prior_findings: str = ""  # retrieved from ChromaDB memory (Phase 5)
 
 

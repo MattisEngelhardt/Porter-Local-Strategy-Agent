@@ -388,8 +388,13 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        `use_thinking=True`, passed=score≥min_score, fail-open (LLM/parse → passing "unavailable");
        `revise` reuses synthesizer.build_system_prompt + evidence + parse_analysis, fail-open keeps
        draft. +7 tests (done 2026-05-30)
-[ ] 9. Pipeline + presentation (full master loop wiring; render_result telemetry; `analyze --effort`;
-       REPL `/effort`) + test_pipeline/test_intake updates
+[x] 9. Pipeline + presentation: `run_pipeline` rewired to the full master loop (parse_intent+effort →
+       clarify → plan(effort shown) → confirm → ResearchManager → synthesize (findings digest) →
+       critique+revise loop (effort-gated) → quality_check → PipelineResult+telemetry). New
+       `SynthesisInput.findings_digest` injected into synthesis. `render_result` telemetry panel
+       (effort · workers · rounds · sources · quality · revisions · mid-research Qs). REPL `/effort`
+       (inline override + session default). `analyze --effort`. test_pipeline rewritten (manager
+       stub + critique), +telemetry render test. (done 2026-05-30 — 127 tests, ruff/mypy clean)
 [ ] 10. Quality gate (ruff + mypy --strict + full pytest green) + live runs (ultra multi-agent,
         auto-effort, mid-research, config-scalable) + document
 [ ] 11. Docs (README + full Phase-3.5 handoff) + `git push origin main`

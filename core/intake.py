@@ -22,13 +22,14 @@ from rich.prompt import Confirm, Prompt
 
 from core.config import AppConfig
 from core.excel_reader import ExcelReadError, read_excel
+from core.intent_parser import parse_effort_override
 from core.pdf_reader import PdfReadError, read_pdf
 from core.pipeline import run_pipeline
 from core.researcher import SearXNGError
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent
 from models.synthesis import PipelineResult
-from models.task import TaskRequest
+from models.task import EffortLevel, TaskRequest
 
 EXIT_COMMANDS = {"exit", "quit", ":q", "q"}
 
@@ -153,6 +154,25 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
             border_style=accent,
         )
     )
+    console.print(Panel(_telemetry_text(result), title="run telemetry", border_style="dim"))
+
+
+def _telemetry_text(result: PipelineResult) -> str:
+    """Build the effort + self-correction telemetry line for the result panel (Phase 3.5)."""
+    parts = [f"effort: [bold]{result.effort.value}[/bold]"]
+    report = result.research_report
+    if report is not None:
+        parts.append(f"{report.workers_used} workers")
+        parts.append(f"{report.rounds_used} rounds")
+        parts.append(f"{report.sources_evaluated} sources evaluated")
+        parts.append(f"{len(report.evidence)} read")
+        if report.midresearch:
+            parts.append(f"{len(report.midresearch)} mid-research Q")
+    if result.critique is not None:
+        verdict = "passed" if result.critique.passed else "failed"
+        parts.append(f"quality {result.critique.score}/100 ({verdict})")
+        parts.append(f"{result.revisions} revision(s)")
+    return "  ·  ".join(parts)
 
 
 def run_repl(
@@ -174,13 +194,18 @@ def run_repl(
         Panel(
             f"[bold]Strategy Agent[/bold]\n"
             f"model: [bold]{client.model_name}[/bold]   backend: {client.backend_url}\n"
-            "Type a task — the agent plans, researches, and produces a structured analysis.\n"
+            "Type a task — the agent plans, researches (multi-agent), and produces a structured "
+            "analysis.\n"
+            "Effort: prefix with [bold]/effort low|high|ultra[/bold] (alone = set the session "
+            "default; auto-detected otherwise).\n"
             "Or drop a file path (PDF / image / .xlsx) to read it.\n"
             "Type [bold]exit[/bold] to quit.",
             title="ready",
             border_style=accent,
         )
     )
+
+    session_effort: EffortLevel | None = None
 
     while True:
         try:
@@ -196,13 +221,24 @@ def run_repl(
             console.print("[dim]bye[/dim]")
             return
 
+        override, stripped = parse_effort_override(text)
+        if override is not None and not stripped:
+            # "/effort ultra" with no task → set the session default effort.
+            session_effort = override
+            console.print(
+                f"[dim]effort set to [bold]{override.value}[/bold] for this session[/dim]"
+            )
+            continue
+        if override is not None:
+            text = stripped
+
         document = detect_file_path(text)
         if document is not None:
             _handle_document(client, console, document, accent)
             continue
 
         # TODO(Phase 5): voice input via Ctrl+Space overlay -> inject transcript here.
-        _handle_task(client, config, console, text, accent)
+        _handle_task(client, config, console, text, accent, override or session_effort)
 
 
 def _handle_document(client: LocalLLMClient, console: Console, path: Path, accent: str) -> None:
@@ -217,12 +253,23 @@ def _handle_document(client: LocalLLMClient, console: Console, path: Path, accen
 
 
 def _handle_task(
-    client: LocalLLMClient, config: AppConfig, console: Console, text: str, accent: str
+    client: LocalLLMClient,
+    config: AppConfig,
+    console: Console,
+    text: str,
+    accent: str,
+    effort_override: EffortLevel | None = None,
 ) -> None:
     """Run the full agent pipeline for a free-text task and render the result."""
     interaction = ReplInteraction(console, accent)
     try:
-        result = run_pipeline(client, config, TaskRequest(raw_input=text), interaction)
+        result = run_pipeline(
+            client,
+            config,
+            TaskRequest(raw_input=text),
+            interaction,
+            effort_override=effort_override,
+        )
     except SearXNGError as exc:
         console.print(Panel(str(exc), title="research failed", border_style="red"))
         return

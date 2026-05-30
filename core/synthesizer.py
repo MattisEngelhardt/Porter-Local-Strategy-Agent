@@ -67,6 +67,13 @@ def build_user_prompt(synthesis_input: SynthesisInput) -> str:
     intent = synthesis_input.intent
     lines = [f"TASK ({intent.task_type.value}): {intent.summary or '(see evidence below)'}"]
 
+    if synthesis_input.findings_digest.strip():
+        lines.append(
+            "\nVALIDATED FINDINGS (from the research team — claim · confidence · date · source; "
+            "lead with these and respect their confidence levels):\n"
+            + synthesis_input.findings_digest.strip()
+        )
+
     if synthesis_input.prior_findings.strip():
         lines.append(
             "\nPRIOR FINDINGS (from earlier analysis):\n" + synthesis_input.prior_findings.strip()

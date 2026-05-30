@@ -10,9 +10,9 @@ from rich.console import Console
 
 import core.intake as intake
 from core.intake import ReplInteraction, detect_file_path, read_document, render_result
-from models.research import DocContent, SourceTier
-from models.synthesis import AnalysisOutput, PipelineResult, Section, SourceRef
-from models.task import Intent, Language, OutputFormat, TaskType
+from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
+from models.synthesis import AnalysisOutput, Critique, PipelineResult, Section, SourceRef
+from models.task import EffortLevel, Intent, Language, OutputFormat, TaskType
 
 
 def _doc(path: Path, doc_type: str) -> DocContent:
@@ -84,6 +84,35 @@ def test_render_result_shows_analysis_structure() -> None:
     assert "reuters.com" in out
     assert "Would generate" in out
     assert "excel" in out
+
+
+def test_render_result_shows_effort_telemetry() -> None:
+    """The result panel surfaces the effort + self-correction telemetry (Phase 3.5)."""
+    # Wide console so the single telemetry line is not wrapped mid-token.
+    console = Console(file=StringIO(), width=240, force_terminal=False)
+    result = PipelineResult(
+        intent=_intent(),
+        routed_formats=[OutputFormat.BRIEF],
+        effort=EffortLevel.ULTRA,
+        revisions=2,
+        critique=Critique(passed=True, score=82),
+        research_report=ResearchReport(
+            workers_used=5,
+            rounds_used=3,
+            sources_evaluated=24,
+            evidence=[FetchedContent(url="https://reuters.com/a", text="t")],
+        ),
+        analysis=AnalysisOutput(
+            title="X", language=Language.EN, bottom_line="bl", sections=[], sources=[]
+        ),
+    )
+    render_result(console, result, "cyan")
+    out = console.file.getvalue()  # type: ignore[attr-defined]
+    assert "ultra" in out
+    assert "5 workers" in out
+    assert "24 sources evaluated" in out
+    assert "82/100" in out
+    assert "2 revision" in out
 
 
 def test_render_result_declined_shows_quick_answer() -> None:
