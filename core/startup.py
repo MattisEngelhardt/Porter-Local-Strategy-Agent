@@ -91,3 +91,41 @@ def check_llm_backend(config: AppConfig) -> list[str]:
             f"  2. Confirm 'llm.base_url' in config.yaml is correct ({llm.base_url})."
         ) from exc
     return []
+
+
+def check_searxng(config: AppConfig, timeout: float = 5.0) -> None:
+    """Verify SearXNG is reachable AND returns JSON (Phase 2 gate, SPEC §9 N-7).
+
+    Two distinct failures get distinct fixes: an unreachable host means Docker /
+    the container is down; a non-JSON response means the JSON output format is not
+    enabled in ``searxng-data/settings.yml``.
+
+    Raises:
+        StartupError: If SearXNG is unreachable or JSON output is disabled.
+    """
+    base = config.research.searxng_url.rstrip("/")
+    url = f"{base}/search"
+    try:
+        response = httpx.get(url, params={"q": "test", "format": "json"}, timeout=timeout)
+        response.raise_for_status()
+    except httpx.HTTPError as exc:
+        raise StartupError(
+            f"SearXNG is not reachable at {base}.\n"
+            "Fix:\n"
+            "  1. Install Docker Desktop from https://docker.com (not the VS Code extension).\n"
+            "  2. Start SearXNG: 'docker compose up -d' in the project root.\n"
+            f"  3. Confirm 'research.searxng_url' in config.yaml is correct ({base})."
+        ) from exc
+
+    try:
+        response.json()
+    except ValueError as exc:
+        raise StartupError(
+            f"SearXNG at {base} responded but did not return JSON.\n"
+            "Fix: enable the JSON output format in searxng-data/settings.yml:\n"
+            "  search:\n"
+            "    formats:\n"
+            "      - html\n"
+            "      - json\n"
+            "Then restart: 'docker compose restart'."
+        ) from exc

@@ -102,3 +102,25 @@
 
 ### PHASE 1 STATUS: ✅ COMPLETE
 ---
+
+## PHASE 2 — Research Engine + Document Reading
+**Executed by**: Opus (claude-opus-4-8)
+**Date**: 2026-05-30
+**Session status**: IN PROGRESS
+
+### Phase Plan (created at session start)
+[ ] 1. Install Phase-2 deps into .venv (aiohttp, trafilatura, diskcache, pdfplumber, pytesseract, Pillow, pandas, openpyxl)
+[ ] 2. Research engine: models (RankedResult, ResearchBundle) + core/researcher.py (SearXNGClient, ContentFetcher, tier/dedup/rank, diskcache, ResearchEngine) + check_searxng startup + `research` CLI + tests
+[ ] 3. core/excel_reader.py (pandas) + tests (real tiny .xlsx)
+[ ] 4. LocalLLMClient `images` param + core/pdf_reader.py (pdfplumber → OCR → vision) + tests (mocked)
+[ ] 5. REPL file-path detection in intake.py + `analyze-doc` CLI + tests
+[ ] 6. Quality gate: ruff + mypy --strict + full pytest
+[ ] 7. README + PROGRESS handoff + git commits + push
+
+### Estimated scope: Medium-Large (research engine + 2 document readers + vision)
+### Runtime reality at session start (read-only checks)
+- Ollama: ✅ HTTP 200. Docker/SearXNG: ❌ not installed (`:8080` down). Tesseract: ❌ not on PATH. Phase-2 pip pkgs: ❌ not installed.
+- Decision (confirmed with user): build full Phase 2, unit-test fully offline (mocked), fail-fast with exact setup instructions. Live web/OCR verification deferred until user installs Docker Desktop + Tesseract.
+
+### PHASE 2 STATUS: ⏳ IN PROGRESS
+---

@@ -59,3 +59,27 @@ class DocContent(BaseModel):
     text: str
     page_count: int | None = None
     extraction_method: str | None = None  # "pdfplumber" | "ocr" | "vision" | "pandas"
+
+
+class RankedResult(SearchResult):
+    """A :class:`SearchResult` enriched with a source tier and a computed ranking score.
+
+    ``rank_score`` makes the tier dominate (Tier 1 always outranks Tier 2 outranks
+    Tier 3) while the original SearXNG ``score`` breaks ties within a tier.
+    """
+
+    tier: SourceTier
+    rank_score: float
+
+
+class ResearchBundle(BaseModel):
+    """Structured output of one research run (Phase 2 — no synthesis yet).
+
+    Synthesis (Phase 3) and output rendering (Phase 4) consume this contract.
+    """
+
+    query: str
+    sub_queries: list[str] = Field(default_factory=list)
+    results: list[RankedResult] = Field(default_factory=list)
+    fetched: list[FetchedContent] = Field(default_factory=list)
+    from_cache: bool = False

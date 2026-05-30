@@ -27,7 +27,14 @@ strict = true
 warn_unused_configs = true
 ignore_missing_imports = false
 
-# PyYAML ships no type stubs; avoid adding types-PyYAML as a runtime dep (RULE 3).
+# These libraries ship no type stubs; avoid adding stub packages as runtime deps (RULE 3).
 [[tool.mypy.overrides]]
-module = ["yaml"]
+module = [
+    "yaml",
+    "trafilatura",
+    "diskcache",
+    "pdfplumber",
+    "pytesseract",
+    "pandas",
+]
 ignore_missing_imports = true

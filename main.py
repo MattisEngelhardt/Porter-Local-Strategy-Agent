@@ -11,6 +11,7 @@ Startup runs LLM backend health checks and fails fast with exact fix instruction
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from pathlib import Path
 from typing import Annotated
@@ -19,10 +20,12 @@ import typer
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
+from rich.table import Table
 
 from core.config import AppConfig, load_config
 from core.intake import run_repl
-from core.startup import StartupError, check_llm_backend
+from core.researcher import ResearchEngine, SearchCache, SearXNGError
+from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
 
 
@@ -49,13 +52,18 @@ console = Console()
 DEFAULT_CONFIG_PATH = Path("config.yaml")
 
 
-def _bootstrap(config_path: Path) -> tuple[AppConfig, LocalLLMClient]:
-    """Load config, run startup checks, and build the LLM client. Fail fast on error."""
+def _load_config_or_exit(config_path: Path) -> AppConfig:
+    """Load and validate config, or print the error and exit non-zero (fail fast)."""
     try:
-        config = load_config(config_path)
+        return load_config(config_path)
     except (FileNotFoundError, ValueError) as exc:
         console.print(Panel(str(exc), title="config error", border_style="red"))
         raise typer.Exit(code=1) from exc
+
+
+def _bootstrap(config_path: Path) -> tuple[AppConfig, LocalLLMClient]:
+    """Load config, run LLM startup check, and build the client. Fail fast on error."""
+    config = _load_config_or_exit(config_path)
 
     try:
         check_llm_backend(config)
@@ -112,6 +120,60 @@ def ask(
             border_style=config.output.colors.accent_cyan,
         )
     )
+
+
+@app.command()
+def research(
+    ctx: typer.Context,
+    query: Annotated[str, typer.Argument(help="What to research on the web")],
+    max_fetch: Annotated[
+        int | None,
+        typer.Option("--max-fetch", help="How many top pages to deep-read"),
+    ] = None,
+) -> None:
+    """Search the web via SearXNG and return ranked, deduplicated results."""
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config = _load_config_or_exit(config_path)
+
+    try:
+        check_searxng(config)
+    except StartupError as exc:
+        console.print(Panel(str(exc), title="startup check failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+
+    cache = SearchCache(config.research)
+    engine = ResearchEngine(config.research, cache=cache)
+    try:
+        bundle = asyncio.run(engine.run(query, max_fetch=max_fetch))
+    except SearXNGError as exc:
+        console.print(Panel(str(exc), title="research failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        cache.close()
+
+    accent = config.output.colors.accent_cyan
+    table = Table(title=f"Research: {query}", border_style=accent, show_lines=False)
+    table.add_column("#", justify="right", style="dim", no_wrap=True)
+    table.add_column("Tier", no_wrap=True)
+    table.add_column("Title")
+    table.add_column("URL", style="dim")
+    for idx, result in enumerate(bundle.results, start=1):
+        table.add_row(str(idx), result.tier.value, result.title or "(untitled)", result.url)
+
+    if bundle.results:
+        console.print(table)
+    else:
+        console.print(Panel("No results found.", border_style="red"))
+
+    fetched_words = sum(item.word_count for item in bundle.fetched)
+    summary = (
+        f"{len(bundle.results)} ranked result(s), "
+        f"{len(bundle.fetched)} page(s) fetched (~{fetched_words} words)."
+    )
+    if bundle.from_cache:
+        summary += "  [dim](served from 24h cache)[/dim]"
+    console.print(Panel(summary, title="summary", border_style=accent))
 
 
 if __name__ == "__main__":
