@@ -480,8 +480,15 @@ Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effor
   → telemetry `effort: low · 1 worker · 1 round · 22 sources evaluated · 2 read`, no critique panel
   (low disables it), structured analysis with Neura-Lens + explicit data-gap flag. ✅
 - **Auto-effort HIGH (live):** `analyze "Screen these 5 European robotics startups as M&A targets"`
-  → auto-detected high (target_screening floors to HIGH), multi-worker + critique (see telemetry in
-  the run output; gemma4 serializes so this takes ~10–20 min on the laptop). [result captured below]
+  → auto-detected **high** (target_screening floors to HIGH). Telemetry:
+  `effort: high · 3 workers · 2 rounds · 133 sources evaluated · 20 read · quality 75/100
+  (passed) · 0 revisions`. Routed to **Excel + Brief** (dual output). The critic ran and passed at
+  the threshold (75) → no revision. Synthesis used **inline source citations** ([16]/[18]/[19]/[20])
+  and the Neura Lens per point. ✅ Notably, since the task named no specific 5 startups and the
+  headless `AutoInteraction` returns "" for mid-research questions, the agent **proceeded on a
+  stated assumption** — it delivered a screening *framework* and flagged the missing target list
+  rather than fabricating names (the documented fail-open mid-research behavior; in the REPL it
+  would ask `ask_text` instead). Total wall-clock ~12 min on the laptop (single gemma4 serializes).
 
 ### Key Technical Decisions (added)
 | Decision | Choice | Reason |
@@ -513,6 +520,6 @@ Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effor
    which Phase 4 can use to fill Excel "Sources"/"Audit Trail" tabs and the telemetry into footers.
 
 ### PHASE 3.5 STATUS: ✅ COMPLETE
-(Code complete, 127 tests green, ruff/mypy clean, LOW run live-verified, pushed. A live HIGH
-auto-effort run was launched for bonus verification; its telemetry will be appended on completion.)
+(Code complete, 127 tests green, ruff/mypy clean, pushed. Both LOW and HIGH runs live-verified —
+HIGH: 3 workers · 2 rounds · 133 sources evaluated · critique passed 75/100 · Excel+Brief.)
 ---
