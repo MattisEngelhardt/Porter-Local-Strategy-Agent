@@ -1,9 +1,14 @@
-"""Interactive REPL intake layer (Phase 2: text + document file paths).
+"""Interactive REPL intake layer (Phase 3: full agent pipeline + document file paths).
 
-A rich-formatted chat loop over :class:`LocalLLMClient`. If the user drops a bare
-path to a supported document (PDF / image / .xlsx), it is routed to the matching
-reader and the extracted content is shown (extraction only — synthesis is Phase 3).
+A rich-formatted chat loop over :class:`LocalLLMClient`. Free-text input runs the full agent
+pipeline (intent → clarification → research-plan confirm → research → reasoning → structured
+analysis, see :mod:`core.pipeline`). If the user drops a bare path to a supported document
+(PDF / image / .xlsx), it is routed to the matching reader and the extracted content is shown.
 Voice input (Ctrl+Space) remains a Phase 5 TODO.
+
+This module is the REPL's presentation layer: :class:`ReplInteraction` is the rich
+implementation of the pipeline's ``Interaction`` protocol, and ``render_result`` displays a
+:class:`PipelineResult` (no file rendering — that is Phase 4).
 """
 
 from __future__ import annotations
@@ -13,13 +18,17 @@ from pathlib import Path
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
-from rich.prompt import Prompt
+from rich.prompt import Confirm, Prompt
 
 from core.config import AppConfig
 from core.excel_reader import ExcelReadError, read_excel
 from core.pdf_reader import PdfReadError, read_pdf
+from core.pipeline import run_pipeline
+from core.researcher import SearXNGError
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent
+from models.synthesis import PipelineResult
+from models.task import TaskRequest
 
 EXIT_COMMANDS = {"exit", "quit", ":q", "q"}
 
@@ -70,6 +79,72 @@ def render_document(console: Console, doc: DocContent, accent: str) -> None:
     )
 
 
+class ReplInteraction:
+    """Rich implementation of the pipeline's ``Interaction`` protocol (interactive REPL)."""
+
+    def __init__(self, console: Console, accent: str) -> None:
+        """Bind the console and accent colour used for prompts and progress."""
+        self._console = console
+        self._accent = accent
+
+    def ask_choice(self, question: str, options: list[str]) -> str:
+        """Show a numbered multiple-choice question and return the user's one-word answer."""
+        self._console.print(f"\n[bold]{question}[/bold]")
+        for index, option in enumerate(options, start=1):
+            self._console.print(f"  [{self._accent}]{index}[/].  {option}")
+        return Prompt.ask("[bold]›[/bold]").strip()
+
+    def confirm(self, prompt: str) -> bool:
+        """Ask a yes/no question (defaults to yes)."""
+        return Confirm.ask(f"[bold]{prompt}[/bold]", default=True)
+
+    def notify(self, message: str) -> None:
+        """Print a dim progress/status line."""
+        self._console.print(f"[dim]{message}[/dim]")
+
+
+def render_result(console: Console, result: PipelineResult, accent: str) -> None:
+    """Render a :class:`PipelineResult` (structured analysis or declined quick answer)."""
+    if result.declined:
+        body = result.quick_answer or "[dim](no answer)[/dim]"
+        console.print(
+            Panel(Markdown(body), title="quick answer (no research)", border_style=accent)
+        )
+        return
+
+    analysis = result.analysis
+    if analysis is None:
+        console.print(Panel("[dim](no analysis produced)[/dim]", border_style="red"))
+        return
+
+    console.print(
+        Panel(
+            Markdown(f"**{analysis.title}**\n\n{analysis.bottom_line}"),
+            title=f"bottom line · {analysis.language.value}",
+            border_style=accent,
+        )
+    )
+    for section in analysis.sections:
+        console.print(
+            Panel(Markdown(section.body or "—"), title=section.heading, border_style=accent)
+        )
+    if analysis.sources:
+        lines = []
+        for source in analysis.sources:
+            tier = f"  [{source.tier.value}]" if source.tier else ""
+            lines.append(f"- {source.url}{tier}")
+        console.print(Panel("\n".join(lines), title="sources", border_style="dim"))
+
+    formats = ", ".join(fmt.value for fmt in result.routed_formats) or "brief"
+    console.print(
+        Panel(
+            f"Would generate: [bold]{formats}[/bold]  [dim](file rendering is Phase 4)[/dim]",
+            title="output plan",
+            border_style=accent,
+        )
+    )
+
+
 def run_repl(
     client: LocalLLMClient,
     config: AppConfig,
@@ -89,7 +164,8 @@ def run_repl(
         Panel(
             f"[bold]Strategy Agent[/bold]\n"
             f"model: [bold]{client.model_name}[/bold]   backend: {client.backend_url}\n"
-            "Type your question, or drop a file path (PDF / image / .xlsx) to read it.\n"
+            "Type a task — the agent plans, researches, and produces a structured analysis.\n"
+            "Or drop a file path (PDF / image / .xlsx) to read it.\n"
             "Type [bold]exit[/bold] to quit.",
             title="ready",
             border_style=accent,
@@ -116,7 +192,7 @@ def run_repl(
             continue
 
         # TODO(Phase 5): voice input via Ctrl+Space overlay -> inject transcript here.
-        _answer(client, console, text, accent)
+        _handle_task(client, config, console, text, accent)
 
 
 def _handle_document(client: LocalLLMClient, console: Console, path: Path, accent: str) -> None:
@@ -130,14 +206,17 @@ def _handle_document(client: LocalLLMClient, console: Console, path: Path, accen
     render_document(console, doc, accent)
 
 
-def _answer(client: LocalLLMClient, console: Console, prompt: str, accent: str) -> None:
-    """Generate one response and render it in a rich panel."""
+def _handle_task(
+    client: LocalLLMClient, config: AppConfig, console: Console, text: str, accent: str
+) -> None:
+    """Run the full agent pipeline for a free-text task and render the result."""
+    interaction = ReplInteraction(console, accent)
     try:
-        with console.status("[dim]thinking…[/dim]", spinner="dots"):
-            response = client.generate(prompt)
+        result = run_pipeline(client, config, TaskRequest(raw_input=text), interaction)
+    except SearXNGError as exc:
+        console.print(Panel(str(exc), title="research failed", border_style="red"))
+        return
     except LLMError as exc:
         console.print(Panel(str(exc), title="LLM error", border_style="red"))
         return
-
-    body = response.strip() or "[dim](empty response)[/dim]"
-    console.print(Panel(Markdown(body), title=client.model_name, border_style=accent))
+    render_result(console, result, accent)

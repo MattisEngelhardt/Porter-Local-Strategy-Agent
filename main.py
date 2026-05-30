@@ -24,11 +24,13 @@ from rich.table import Table
 
 from core.config import AppConfig, load_config
 from core.excel_reader import ExcelReadError
-from core.intake import read_document, render_document, run_repl
+from core.intake import read_document, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
+from core.pipeline import AutoInteraction, run_pipeline
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
+from models.task import TaskRequest
 
 
 def _force_utf8_io() -> None:
@@ -176,6 +178,41 @@ def research(
     if bundle.from_cache:
         summary += "  [dim](served from 24h cache)[/dim]"
     console.print(Panel(summary, title="summary", border_style=accent))
+
+
+@app.command()
+def analyze(
+    ctx: typer.Context,
+    task_text: Annotated[str, typer.Argument(help="The task to research and analyze")],
+) -> None:
+    """Run the full agent pipeline non-interactively (intent → research → structured analysis).
+
+    Clarifications are auto-answered (sensible defaults) and the research plan is auto-confirmed,
+    so this is the scriptable counterpart to the interactive REPL (``python main.py``).
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)
+
+    try:
+        check_searxng(config)
+        with console.status("[dim]analyzing…[/dim]", spinner="dots"):
+            result = run_pipeline(
+                client, config, TaskRequest(raw_input=task_text), AutoInteraction()
+            )
+    except StartupError as exc:
+        console.print(Panel(str(exc), title="startup check failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except SearXNGError as exc:
+        console.print(Panel(str(exc), title="research failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    render_result(console, result, config.output.colors.accent_cyan)
 
 
 @app.command(name="analyze-doc")
