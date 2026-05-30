@@ -377,7 +377,11 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        playbook injected) → SearXNG+fetch (reused Phase-2) → LLM extracts dated/sourced/confidence
        Findings → iterate ≤ max_research_rounds while thin; LLM via `asyncio.to_thread`; fail-open
        on LLM/parse; SearXNG total-fail propagates (manager decides). +5 tests (done 2026-05-30)
-[ ] 7. ResearchManager (decompose, parallel orchestration, aggregation, mid-research clarification) + tests
+[x] 7. ResearchManager (`core/research_agent.py`): decompose (analysis-playbook-driven, N=research_workers,
+       fallback to plan sub-queries) → run workers concurrently (`asyncio.Semaphore(worker_concurrency)`)
+       → mid-research clarification (detect blocking ambiguity → `ask_text` → targeted re-run, ≤
+       max_midresearch_questions, fail-open) → aggregate ResearchReport + telemetry; SearXNG
+       all-worker-fail re-raises SearXNGError (fail-fast). +5 tests (done 2026-05-30)
 [ ] 8. Critic + revision (`core/critic.py`, effort-gated, source-validation rubric, fail-open) + tests
 [ ] 9. Pipeline + presentation (full master loop wiring; render_result telemetry; `analyze --effort`;
        REPL `/effort`) + test_pipeline/test_intake updates

@@ -21,14 +21,37 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from typing import Protocol
 
-from core.config import EffortLevelConfig
+from core.config import AppConfig, EffortLevelConfig
 from core.json_utils import extract_json_array, extract_json_object
-from core.playbooks import Playbooks
-from core.researcher import ContentFetcher, SearXNGClient, dedup_results, rank_results
+from core.playbooks import Playbooks, load_playbooks
+from core.researcher import (
+    ContentFetcher,
+    SearXNGClient,
+    SearXNGError,
+    dedup_results,
+    rank_results,
+)
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.research import Confidence, FetchedContent, Finding, SearchQuery, WorkerFindings
-from models.task import Language
+from models.research import (
+    Confidence,
+    FetchedContent,
+    Finding,
+    ResearchReport,
+    SearchQuery,
+    WorkerFindings,
+)
+from models.task import ClarificationRound, Intent, Language, ResearchPlan
+
+
+class _Interaction(Protocol):
+    """The slice of the pipeline's Interaction the manager needs (avoids a circular import)."""
+
+    def ask_text(self, question: str) -> str: ...
+
+    def notify(self, message: str) -> None: ...
+
 
 # Query/extraction excerpt caps so several sources fit comfortably in num_ctx (32768).
 _MAX_SOURCE_CHARS = 1500
@@ -107,6 +130,7 @@ class ResearchWorker:
         self._playbooks = playbooks
         self._language = language
         self.results_evaluated = 0  # ranked search results seen (telemetry for the manager)
+        self.rounds_used = 0  # research rounds actually executed (telemetry for the manager)
 
     async def run(self, sub_topic: str, effort_cfg: EffortLevelConfig) -> WorkerFindings:
         """Research one sub-topic to depth and return structured :class:`WorkerFindings`.
@@ -122,7 +146,8 @@ class ResearchWorker:
         gaps: list[str] = []
         confidence = Confidence.ESTIMATE
 
-        for _round in range(rounds):
+        for round_number in range(1, rounds + 1):
+            self.rounds_used = round_number
             queries = await asyncio.to_thread(self._craft_queries, sub_topic, findings_all, gaps)
             queries_all.extend(q for q in queries if q not in queries_all)
 
@@ -201,7 +226,248 @@ class ResearchWorker:
         return _parse_extraction(data)
 
 
+_DECOMPOSE_SYSTEM = (
+    "You are the research MANAGER of a deep-research team. Decompose the task into exactly "
+    "{n} distinct, non-overlapping research sub-topics — each a focused angle one specialist can "
+    "research independently. Choose angles using the analysis framework that fits the task type:"
+    "\n\n{analysis}\n\n"
+    "Guidance: a single-company deep-dive → angles like technology moat, commercial traction, "
+    "team quality, strategic moves, financials. Screening MULTIPLE entities → one sub-topic per "
+    "entity. Market sizing → top-down size, bottom-up demand, key players, trends. Pick the angles "
+    "that fit THIS task. Respond with ONLY a JSON array of exactly {n} short sub-topic strings."
+)
+
+_MIDRESEARCH_SYSTEM = (
+    "You are the research MANAGER reviewing the gaps after a first research pass. If — and ONLY "
+    "if — there is a blocking ambiguity that could not be known upfront and that materially "
+    "changes what to search next (e.g. the entity name is ambiguous, or the scope / segment / "
+    "geography is unclear), produce ONE precise question for the user plus a refined sub-topic to "
+    "research once it is answered. If there is no such blocking ambiguity, return an empty "
+    "question. Never ask what can reasonably be assumed.\n"
+    "Respond with ONLY a JSON object: "
+    '{"question": "the precise question, or empty string", "refine_topic": "sub-topic to research '
+    'after the answer"}'
+)
+
+
+class ResearchManager:
+    """Orchestrator (Phase 3.5): decompose → run N workers concurrently → mid-research → aggregate.
+
+    Replaces Phase-3's single research step. Concurrency is config-gated
+    (``config.effort.worker_concurrency``) so the same code runs modestly on the laptop and fans
+    out fully on the planned server — zero code change to scale (SPEC §15.5). Worker failures are
+    isolated; a SearXNG total failure (every worker starved) re-raises :class:`SearXNGError` so the
+    caller keeps the Phase-3 fail-fast policy.
+    """
+
+    async def run(
+        self,
+        client: LocalLLMClient,
+        config: AppConfig,
+        intent: Intent,
+        plan: ResearchPlan,
+        interaction: _Interaction,
+        effort_cfg: EffortLevelConfig,
+        searx: SearXNGClient | None = None,
+        fetcher: ContentFetcher | None = None,
+    ) -> ResearchReport:
+        """Run the full multi-agent research and return an aggregated :class:`ResearchReport`."""
+        playbooks = load_playbooks()
+        searx = searx or SearXNGClient(config.research)
+        fetcher = fetcher or ContentFetcher(
+            config.research.model_copy(
+                update={"max_fetch_per_run": effort_cfg.max_fetch_per_worker}
+            )
+        )
+
+        sub_topics = await asyncio.to_thread(
+            self._decompose, client, intent, plan, playbooks, effort_cfg.research_workers
+        )
+        interaction.notify(
+            _t(
+                intent.language,
+                f"Zerlege in {len(sub_topics)} Research-Stränge…",
+                f"Decomposing into {len(sub_topics)} research angles…",
+            )
+        )
+
+        workers = [
+            ResearchWorker(client, searx, fetcher, playbooks, intent.language) for _ in sub_topics
+        ]
+        semaphore = asyncio.Semaphore(max(1, config.effort.worker_concurrency))
+
+        async def _run_one(worker: ResearchWorker, topic: str) -> WorkerFindings:
+            async with semaphore:
+                interaction.notify(_t(intent.language, f"Worker: {topic}", f"Worker: {topic}"))
+                return await worker.run(topic, effort_cfg)
+
+        outcomes = await asyncio.gather(
+            *(_run_one(worker, topic) for worker, topic in zip(workers, sub_topics, strict=True)),
+            return_exceptions=True,
+        )
+
+        worker_findings: list[WorkerFindings] = []
+        searx_errors: list[SearXNGError] = []
+        for outcome in outcomes:
+            if isinstance(outcome, WorkerFindings):
+                worker_findings.append(outcome)
+            elif isinstance(outcome, SearXNGError):
+                searx_errors.append(outcome)
+            # Any other exception is a fail-open worker glitch: skip it, keep the run alive.
+
+        # Hard dep: if every worker was starved by SearXNG, fail fast with fix instructions.
+        if not worker_findings and searx_errors and len(searx_errors) == len(sub_topics):
+            raise searx_errors[0]
+
+        midresearch: list[ClarificationRound] = []
+        if effort_cfg.max_midresearch_questions > 0 and worker_findings:
+            midresearch = await self._midresearch(
+                client,
+                config,
+                intent,
+                interaction,
+                searx,
+                fetcher,
+                playbooks,
+                effort_cfg,
+                worker_findings,
+                workers,
+            )
+
+        return _aggregate_report(intent, plan, sub_topics, worker_findings, midresearch, workers)
+
+    # ------------------------------------------------------------------ manager LLM steps
+    def _decompose(
+        self,
+        client: LocalLLMClient,
+        intent: Intent,
+        plan: ResearchPlan,
+        playbooks: Playbooks,
+        n: int,
+    ) -> list[str]:
+        """Ask the LLM for N sub-topics (fail-open → plan sub-queries, then the task summary)."""
+        count = max(1, n)
+        system = _DECOMPOSE_SYSTEM.format(n=count, analysis=playbooks.analysis)
+        prompt = (
+            f"TASK ({intent.task_type.value}): {intent.summary or '(see below)'}\n"
+            f"Return the JSON array of exactly {count} sub-topics now."
+        )
+        try:
+            response = client.generate(prompt, system=system, use_thinking=False)
+            array = extract_json_array(response)
+        except LLMError:
+            array = None
+        topics = (
+            [str(x).strip() for x in array if isinstance(x, str) and str(x).strip()]
+            if array
+            else []
+        )
+        if not topics:
+            topics = [q for q in plan.sub_questions if q.strip()]
+        if not topics:
+            topics = [intent.summary.strip() or "the task"]
+        return topics[:count]
+
+    async def _midresearch(
+        self,
+        client: LocalLLMClient,
+        config: AppConfig,
+        intent: Intent,
+        interaction: _Interaction,
+        searx: SearXNGClient,
+        fetcher: ContentFetcher,
+        playbooks: Playbooks,
+        effort_cfg: EffortLevelConfig,
+        worker_findings: list[WorkerFindings],
+        workers: list[ResearchWorker],
+    ) -> list[ClarificationRound]:
+        """Detect blocking ambiguities, ask the user, and feed answers into targeted re-runs."""
+        rounds: list[ClarificationRound] = []
+        for _ in range(effort_cfg.max_midresearch_questions):
+            gaps = [gap for wf in worker_findings for gap in wf.gaps]
+            probe = await asyncio.to_thread(self._detect_midresearch, client, intent, gaps)
+            question = probe.get("question", "").strip()
+            if not question:
+                break
+            answer = interaction.ask_text(question).strip()
+            rounds.append(ClarificationRound(question=question, answer=answer or None))
+            if not answer:
+                # Empty answer → proceed on assumption (never block delivery).
+                interaction.notify(
+                    _t(
+                        intent.language,
+                        "Keine Antwort — fahre mit Annahme fort.",
+                        "No answer — proceeding on an assumption.",
+                    )
+                )
+                break
+            refine = probe.get("refine_topic", "").strip() or (intent.summary or question)
+            sub_topic = f"{refine} — {answer}"
+            worker = ResearchWorker(client, searx, fetcher, playbooks, intent.language)
+            workers.append(worker)
+            interaction.notify(
+                _t(
+                    intent.language,
+                    f"Vertiefe nach Rückfrage: {sub_topic}",
+                    f"Following up after your answer: {sub_topic}",
+                )
+            )
+            try:
+                worker_findings.append(await worker.run(sub_topic, effort_cfg))
+            except SearXNGError:
+                pass  # fail-open: a failed follow-up never blocks delivery
+        return rounds
+
+    def _detect_midresearch(
+        self, client: LocalLLMClient, intent: Intent, gaps: list[str]
+    ) -> dict[str, str]:
+        """Probe for a blocking ambiguity; return ``{"question", "refine_topic"}`` (fail-open)."""
+        gap_text = "; ".join(gaps[:8]) or "(none reported)"
+        prompt = (
+            f"TASK ({intent.task_type.value}): {intent.summary or '(unknown)'}\n"
+            f"Gaps after the first pass: {gap_text}\nReturn the JSON now."
+        )
+        try:
+            response = client.generate(prompt, system=_MIDRESEARCH_SYSTEM, use_thinking=False)
+            data = extract_json_object(response)
+        except LLMError:
+            data = None
+        if not isinstance(data, dict):
+            return {"question": "", "refine_topic": ""}
+        return {
+            "question": _opt_str(data.get("question")) or "",
+            "refine_topic": _opt_str(data.get("refine_topic")) or "",
+        }
+
+
 # ------------------------------------------------------------------- pure helpers
+def _t(language: Language, de: str, en: str) -> str:
+    """Pick the German or English string for the language."""
+    return de if language == Language.DE else en
+
+
+def _aggregate_report(
+    intent: Intent,
+    plan: ResearchPlan,
+    sub_topics: list[str],
+    worker_findings: list[WorkerFindings],
+    midresearch: list[ClarificationRound],
+    workers: list[ResearchWorker],
+) -> ResearchReport:
+    """Aggregate worker outputs + telemetry into a :class:`ResearchReport` (dedup evidence)."""
+    evidence = _dedup_sources([src for wf in worker_findings for src in wf.sources])
+    return ResearchReport(
+        query=intent.summary or (plan.sub_questions[0] if plan.sub_questions else ""),
+        sub_topics=sub_topics,
+        worker_findings=worker_findings,
+        evidence=evidence,
+        rounds_used=max((w.rounds_used for w in workers), default=0),
+        workers_used=len(worker_findings),
+        sources_evaluated=sum(w.results_evaluated for w in workers),
+        midresearch=midresearch,
+    )
+
+
 def _refine_context(prior_findings: list[Finding], gaps: list[str]) -> str:
     """Build a short refinement note for the next query round (so it digs, not repeats)."""
     if not prior_findings and not gaps:

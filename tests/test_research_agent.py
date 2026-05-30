@@ -8,10 +8,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.config import EffortLevelConfig
+import pytest
+
+from core.config import AppConfig, EffortLevelConfig
+from core.pipeline import AutoInteraction
 from core.playbooks import load_playbooks
-from core.research_agent import ResearchWorker
+from core.research_agent import ResearchManager, ResearchWorker
+from core.researcher import SearXNGError
 from models.research import Confidence, FetchedContent, SearchResult
+from models.task import Intent, Language, OutputFormat, ResearchPlan, TaskType
 
 
 class _ScriptedClient:
@@ -133,3 +138,165 @@ async def test_worker_handles_no_sources() -> None:
     findings = await _worker(client, _FakeSearx([]), _FakeFetcher([])).run("t", cfg)
     assert findings.findings == []
     assert findings.confidence == Confidence.ESTIMATE
+
+
+# ===================================================================== ResearchManager
+class _MgrClient:
+    """Scripted client for the manager: routes by system-prompt keyword to a canned response."""
+
+    def __init__(
+        self,
+        *,
+        decompose: str,
+        queries: str = '["q"]',
+        extraction: str = _EXTRACTION,
+        midresearch: str = '{"question": "", "refine_topic": ""}',
+    ) -> None:
+        self.decompose = decompose
+        self.queries = queries
+        self.extraction = extraction
+        self.midresearch = midresearch
+
+    def generate(self, prompt: str, system: str = "", use_thinking: Any = None, **kw: Any) -> str:
+        s = system.lower()
+        if "decompose the task" in s:
+            return self.decompose
+        if "craft a small spread" in s:
+            return self.queries
+        if "blocking ambiguity" in s:
+            return self.midresearch
+        return self.extraction
+
+
+class _RaisingSearx:
+    """Async SearXNG stub that always fails (simulates SearXNG being down)."""
+
+    async def search_many(self, queries: list[Any]) -> list[tuple[str, list[SearchResult]]]:
+        raise SearXNGError("all queries failed")
+
+
+def _intent() -> Intent:
+    return Intent(
+        task_type=TaskType.COMPETITOR_ANALYSIS,
+        output_formats=[OutputFormat.BRIEF],
+        language=Language.EN,
+        summary="Analyze 1X Technologies",
+    )
+
+
+def _plan() -> ResearchPlan:
+    return ResearchPlan(sub_questions=["1X funding", "1X tech"], summary="Go?")
+
+
+async def test_manager_decomposes_and_aggregates() -> None:
+    """The manager decomposes into N sub-topics, runs workers, and aggregates telemetry."""
+    client = _MgrClient(decompose='["funding", "technology", "team"]')
+    cfg = EffortLevelConfig(
+        research_workers=3,
+        max_research_rounds=1,
+        max_fetch_per_worker=3,
+        max_midresearch_questions=0,
+    )
+    report = await ResearchManager().run(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _intent(),
+        _plan(),
+        AutoInteraction(),
+        cfg,
+        searx=_FakeSearx(_RESULTS),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(_PAGES),  # type: ignore[arg-type]
+    )
+    assert report.sub_topics == ["funding", "technology", "team"]
+    assert report.workers_used == 3
+    assert len(report.evidence) == 1  # deduped by URL across the 3 workers
+    assert report.sources_evaluated > 0
+    assert report.rounds_used == 1
+    assert report.worker_findings[0].findings[0].claim == "1X raised $100M"
+
+
+async def test_manager_decompose_fallback_to_plan() -> None:
+    """If decomposition returns nothing usable, it falls back to the plan's sub-queries."""
+    client = _MgrClient(decompose="not a json array")
+    cfg = EffortLevelConfig(research_workers=2, max_research_rounds=1, max_midresearch_questions=0)
+    report = await ResearchManager().run(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _intent(),
+        _plan(),
+        AutoInteraction(),
+        cfg,
+        searx=_FakeSearx(_RESULTS),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(_PAGES),  # type: ignore[arg-type]
+    )
+    assert report.sub_topics == ["1X funding", "1X tech"]  # from the plan
+
+
+async def test_manager_midresearch_feeds_answer_into_followup() -> None:
+    """A blocking-ambiguity question is asked, and the answer drives a targeted follow-up worker."""
+    client = _MgrClient(
+        decompose='["overview"]',
+        midresearch='{"question": "Robotics or payments?", "refine_topic": "1X robotics"}',
+    )
+    cfg = EffortLevelConfig(
+        research_workers=1,
+        max_research_rounds=1,
+        max_fetch_per_worker=3,
+        max_midresearch_questions=1,
+    )
+    interaction = AutoInteraction(text_answers=["robotics"])
+    report = await ResearchManager().run(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _intent(),
+        _plan(),
+        interaction,
+        cfg,
+        searx=_FakeSearx(_RESULTS),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(_PAGES),  # type: ignore[arg-type]
+    )
+    assert len(report.midresearch) == 1
+    assert report.midresearch[0].answer == "robotics"
+    assert interaction.asked_text == ["Robotics or payments?"]
+    # The answer flowed into a follow-up worker (extra findings → workers_used grew past 1).
+    assert report.workers_used == 2
+    assert any("robotics" in note for note in interaction.notes)
+
+
+async def test_manager_midresearch_empty_answer_assumes() -> None:
+    """An empty mid-research answer is recorded and the manager proceeds (no follow-up worker)."""
+    client = _MgrClient(
+        decompose='["overview"]',
+        midresearch='{"question": "Which segment?", "refine_topic": "segment"}',
+    )
+    cfg = EffortLevelConfig(research_workers=1, max_research_rounds=1, max_midresearch_questions=1)
+    interaction = AutoInteraction(text_answers=[])  # no answer → assume + proceed
+    report = await ResearchManager().run(
+        client,  # type: ignore[arg-type]
+        AppConfig(),
+        _intent(),
+        _plan(),
+        interaction,
+        cfg,
+        searx=_FakeSearx(_RESULTS),  # type: ignore[arg-type]
+        fetcher=_FakeFetcher(_PAGES),  # type: ignore[arg-type]
+    )
+    assert report.midresearch[0].answer is None
+    assert report.workers_used == 1  # no follow-up worker launched
+
+
+async def test_manager_all_searx_fail_is_fail_fast() -> None:
+    """If every worker is starved by SearXNG, the manager re-raises SearXNGError (fail-fast)."""
+    client = _MgrClient(decompose='["a", "b"]')
+    cfg = EffortLevelConfig(research_workers=2, max_research_rounds=1, max_midresearch_questions=0)
+    with pytest.raises(SearXNGError):
+        await ResearchManager().run(
+            client,  # type: ignore[arg-type]
+            AppConfig(),
+            _intent(),
+            _plan(),
+            AutoInteraction(),
+            cfg,
+            searx=_RaisingSearx(),  # type: ignore[arg-type]
+            fetcher=_FakeFetcher(_PAGES),  # type: ignore[arg-type]
+        )
