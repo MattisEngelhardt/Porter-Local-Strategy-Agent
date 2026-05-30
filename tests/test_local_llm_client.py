@@ -74,9 +74,7 @@ def test_backend_url_and_model_from_config() -> None:
     assert client.backend_url == "http://localhost:11434"
 
     # A different config -> different backend, zero code changes.
-    other = LocalLLMClient(
-        _ollama_config(model="qwen3:8b", base_url="http://localhost:1234")
-    )
+    other = LocalLLMClient(_ollama_config(model="qwen3:8b", base_url="http://localhost:1234"))
     assert other.model_name == "qwen3:8b"
     assert other.backend_url == "http://localhost:1234"
 
@@ -183,8 +181,6 @@ def test_live_generate_returns_text() -> None:
         pytest.skip("Ollama not reachable — skipping live LLM test.")
 
     client = LocalLLMClient(config.llm)
-    result = client.generate(
-        "Reply with exactly one word: pong", use_thinking=False
-    )
+    result = client.generate("Reply with exactly one word: pong", use_thinking=False)
     assert isinstance(result, str)
     assert result.strip() != ""

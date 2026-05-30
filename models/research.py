@@ -6,7 +6,7 @@ Used by the research engine (Phase 2). Phase 1 only defines the contracts.
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from models.task import Language
 
 
-class SourceTier(str, Enum):
+class SourceTier(StrEnum):
     """Source trust tier (research_playbook, SPEC §13). Tier 1 = highest trust."""
 
     TIER_1 = "tier_1"  # Bloomberg, TechCrunch, Reuters, FT, official filings

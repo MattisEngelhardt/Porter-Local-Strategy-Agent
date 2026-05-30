@@ -7,7 +7,7 @@ to exist in Phase 1.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
@@ -17,7 +17,7 @@ from models.task import Language
 CellValue = str | int | float | bool | None
 
 
-class ExcelTemplate(str, Enum):
+class ExcelTemplate(StrEnum):
     """The four Excel templates (SPEC §12)."""
 
     DECISION_MATRIX = "decision_matrix"  # E-1

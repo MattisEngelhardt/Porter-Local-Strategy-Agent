@@ -5,14 +5,14 @@ Used by the PPTX exporter (Phase 4). Phase 1 only defines the contracts.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, Field
 
 from models.task import Audience, Language
 
 
-class SlideType(str, Enum):
+class SlideType(StrEnum):
     """The 10 slide types (SPEC §11)."""
 
     TITLE = "title"

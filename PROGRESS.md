@@ -17,8 +17,8 @@
 [x] 5. llm/local_llm_client.py (provider-aware) + tests/test_local_llm_client.py (done — 12 unit + 1 live, all pass)
 [x] 6. core/startup.py health checks + core/intake.py REPL (done)
 [x] 7. main.py (typer: `ask` + REPL), wiring config → startup checks → client (done — gate verified)
-[ ] 8. docker-compose.yml + README.md
-[ ] 9. ruff format + ruff check --fix; mypy --strict on llm/ + models/ + core/config.py
+[x] 8. docker-compose.yml + README.md (done)
+[x] 9. ruff format + ruff check --fix; mypy --strict on llm/ + models/ + core/ + main.py (done — clean; enums → StrEnum)
 [ ] 10. Verify success gate; write full Phase 1 handoff (this file)
 
 ### Estimated scope: Medium (foundation skeleton)

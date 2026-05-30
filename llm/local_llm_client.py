@@ -22,14 +22,15 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Iterator
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 
 from core.config import LLMConfig
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from openai import OpenAI
+    from openai import OpenAI, Stream
+    from openai.types.chat import ChatCompletion, ChatCompletionChunk
 
 # Connection/read timeouts. Local LLMs with CPU offload can be slow, so the read
 # timeout is generous while the connect timeout fails fast when nothing is listening.
@@ -114,9 +115,7 @@ class LocalLLMClient:
             )
         return self._openai
 
-    def _build_messages(
-        self, prompt: str, system: str, use_thinking: bool
-    ) -> list[dict[str, str]]:
+    def _build_messages(self, prompt: str, system: str, use_thinking: bool) -> list[dict[str, str]]:
         """Build the chat messages, applying family-specific thinking-mode markers.
 
         gemma: prepend ``<|think|>`` to the system prompt. qwen: append ``/think`` (or
@@ -217,7 +216,7 @@ class LocalLLMClient:
 
         # OpenAI-compatible backends (LM Studio / llama.cpp / generic OpenAI)
         try:
-            completion = self._openai_client().chat.completions.create(
+            raw = self._openai_client().chat.completions.create(
                 model=self._model,
                 messages=messages,  # type: ignore[arg-type]
                 temperature=self._temperature,
@@ -226,6 +225,7 @@ class LocalLLMClient:
             )
         except Exception as exc:  # openai SDK raises its own error hierarchy
             raise self._wrap_openai_error(exc) from exc
+        completion = cast("ChatCompletion", raw)
         choice = completion.choices[0].message.content
         return choice or ""
 
@@ -246,13 +246,14 @@ class LocalLLMClient:
             return
 
         try:
-            stream = self._openai_client().chat.completions.create(
+            raw_stream = self._openai_client().chat.completions.create(
                 model=self._model,
                 messages=messages,  # type: ignore[arg-type]
                 temperature=self._temperature,
                 stream=True,
                 extra_body={"options": {"num_ctx": resolved_num_ctx}},
             )
+            stream = cast("Stream[ChatCompletionChunk]", raw_stream)
             for chunk in stream:
                 delta = chunk.choices[0].delta.content
                 if delta:
@@ -260,9 +261,7 @@ class LocalLLMClient:
         except Exception as exc:
             raise self._wrap_openai_error(exc) from exc
 
-    def _stream_ollama(
-        self, messages: list[dict[str, str]], num_ctx: int
-    ) -> Iterator[str]:
+    def _stream_ollama(self, messages: list[dict[str, str]], num_ctx: int) -> Iterator[str]:
         """Stream from Ollama's native /api/chat (NDJSON), yielding content chunks."""
         url = f"{self._base_url}/api/chat"
         payload = {

@@ -7,13 +7,13 @@ defines them. No behavior lives here — pure data contracts (WORKFLOW §4).
 from __future__ import annotations
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
 
-class OutputFormat(str, Enum):
+class OutputFormat(StrEnum):
     """The three first-class output types (SPEC §4.6)."""
 
     BRIEF = "brief"  # PDF brief
@@ -21,14 +21,14 @@ class OutputFormat(str, Enum):
     EXCEL = "excel"  # .xlsx workbook
 
 
-class Language(str, Enum):
+class Language(StrEnum):
     """Detected I/O language. Config may use 'auto'; detection resolves to one of these."""
 
     DE = "de"
     EN = "en"
 
 
-class TaskType(str, Enum):
+class TaskType(StrEnum):
     """Task categories the agent recognizes (SPEC §3.4 / §5.4)."""
 
     COMPETITOR_ANALYSIS = "competitor_analysis"
@@ -48,7 +48,7 @@ class TaskType(str, Enum):
     ADHOC = "adhoc"
 
 
-class Depth(str, Enum):
+class Depth(StrEnum):
     """Research depth (SPEC §5.2)."""
 
     QUICK = "quick"  # 10-15 min
@@ -56,7 +56,7 @@ class Depth(str, Enum):
     DEEP = "deep"  # 45-60 min
 
 
-class Audience(str, Enum):
+class Audience(StrEnum):
     """Intended audience for the output (SPEC §5.2)."""
 
     CEO_BOARD = "ceo_board"
