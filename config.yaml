@@ -34,6 +34,39 @@ agent:
   max_clarification_rounds: 3          # user-authorized override of SPEC §5.2 (was 2)
   show_research_plan: true
 
+effort:                                # Phase 3.5 master dial — auto-detected, overridable
+  default: "high"                      # used when auto-detect is unsure (never silently shallow)
+  critique_min_score: 75               # global pass threshold for the output critic
+  worker_concurrency: 2                # workers truly running at once (laptop=2; server: raise)
+  levels:
+    low:
+      research_workers: 1
+      max_research_rounds: 1
+      max_fetch_per_worker: 3
+      max_clarifications: 1
+      max_midresearch_questions: 0
+      revisions: 0
+      critique: false
+      thinking: false
+    high:
+      research_workers: 3
+      max_research_rounds: 2
+      max_fetch_per_worker: 5
+      max_clarifications: 2
+      max_midresearch_questions: 1
+      revisions: 1
+      critique: true
+      thinking: true
+    ultra:
+      research_workers: 5
+      max_research_rounds: 3
+      max_fetch_per_worker: 8
+      max_clarifications: 3
+      max_midresearch_questions: 2
+      revisions: 2
+      critique: true
+      thinking: true
+
 output:
   default_format: "brief"              # "brief" | "deck" | "excel" | agent-decides
   output_dir: "./output"

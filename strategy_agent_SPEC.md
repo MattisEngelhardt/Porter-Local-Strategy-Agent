@@ -1207,4 +1207,53 @@ Example of analysis: "Boston Dynamics' move into industrial automotive signals t
 
 ---
 
+### Phase 3.5: Advanced Agent Loop [user-authorized amendment 2026-05-30]
+
+> **§15.5** — This is a deliberate, user-authorized amendment to the LOCKED SPEC (approved in
+> `PHASE_3.5_PLAN.md`, v1.0). It deepens the Phase-3 agent loop between Phase 3 and Phase 4. It
+> changes no content decisions (RULE 14): the role, Neura context, templates, output types, and
+> playbook *content* are untouched. It is purely an architectural upgrade of *how* the agent
+> researches and self-checks. Still out of scope here: file rendering (Phase 4), ChromaDB
+> memory/learning-delta (Phase 5).
+
+**Goal:** Turn Phase 3's linear loop (intent → ≤3 questions → one research pass → one synthesis)
+into a non-linear, self-correcting, proactive multi-agent loop. The `deep_research_playbook.md`
+authored in this phase is new content presented for user review.
+
+**Delivers:**
+- **Effort master dial (low / high / ultra)** — one auto-detected, overridable knob (`/effort` in
+  the REPL, `--effort` on `analyze`) that absorbs the old depth axis and drives the *whole* loop's
+  intensity (workers, rounds, fetch depth, clarifications, mid-research questions, revisions,
+  critique, thinking, concurrency) **config-driven per level** (`config.yaml` `effort` block).
+  Auto-detect defaults to **high** when unsure — never silently shallow.
+- **Multi-agent deep research (orchestrator-workers, by default)** — a `ResearchManager`
+  decomposes the task into N sub-topics and runs N parallel research-worker identities, each
+  validating sources (recency/authority/cross-reference) and reporting structured `Finding`s;
+  the manager aggregates a clean evidence report. Correctly concurrent (async, web I/O parallel,
+  LLM steps via `asyncio.to_thread`); degree of concurrency is config-gated
+  (`effort.worker_concurrency`) → scales to the planned server + larger model with zero code change.
+- **`deep_research_playbook.md`** — authored methodology the workers obey (authoritative + recent +
+  cross-referenced sources, depth over breadth, confidence + date on every fact).
+- **Interleaved mid-research clarification** — a worker/manager that hits a blocking ambiguity comes
+  back to the user mid-research with a precise question (bounded by effort) and feeds the answer
+  into that area's search.
+- **Output critic + revision loop (evaluator-optimizer)** — a separate agent scores the draft
+  against a playbook rubric (incl. source-validation) and forces targeted revisions before delivery.
+  Effort-gated.
+- All advisory layers (worker/critic/coverage) are **fail-open** (never block delivery); hard deps
+  (SearXNG all-fail, LLM unreachable) keep Phase-3 fail-fast with fix instructions.
+
+**Success criteria:**
+- `analyze --effort ultra "Vollständige Analyse von 1X Technologies …"` → 5 parallel workers,
+  multiple rounds, critique + revision; result panel shows effort, workers, rounds, sources
+  evaluated, quality score, revisions.
+- Auto-effort: a quick news query → low (1 worker, no critique); a 5-company screen → high/ultra
+  (multi-worker). `--effort` / `/effort` override wins over auto.
+- Raising `effort.worker_concurrency` + `levels.ultra.research_workers` fans out more workers with
+  no code change (the future-hardware knob).
+- Full `pytest` green; `ruff` clean; `mypy --strict` clean; fail-open paths covered.
+
+---
+
 *End of strategy_agent_SPEC.md v0.4 — All content decisions resolved. Agent architecture complete.*
+*Amended 2026-05-30: §15.5 Phase 3.5 (Advanced Agent Loop) — user-authorized.*

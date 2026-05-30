@@ -70,6 +70,86 @@ class AgentConfig(BaseModel):
     show_research_plan: bool = True
 
 
+class EffortLevelConfig(BaseModel):
+    """Per-level intensity parameters for the effort master dial (Phase 3.5).
+
+    Every knob the advanced loop reads — worker count, research rounds, fetch depth,
+    clarification/mid-research budgets, revision count, and the critique/thinking switches —
+    lives here, one set per effort level. Defaults mirror ``high`` so a missing field is never
+    silently shallow.
+    """
+
+    research_workers: int = Field(default=3, ge=1)
+    max_research_rounds: int = Field(default=2, ge=1)
+    max_fetch_per_worker: int = Field(default=5, ge=1)
+    max_clarifications: int = Field(default=2, ge=0)
+    max_midresearch_questions: int = Field(default=1, ge=0)
+    revisions: int = Field(default=1, ge=0)
+    critique: bool = True
+    thinking: bool = True
+
+
+def _default_effort_levels() -> dict[str, EffortLevelConfig]:
+    """The three built-in effort levels (used when ``config.yaml`` omits the block)."""
+    return {
+        "low": EffortLevelConfig(
+            research_workers=1,
+            max_research_rounds=1,
+            max_fetch_per_worker=3,
+            max_clarifications=1,
+            max_midresearch_questions=0,
+            revisions=0,
+            critique=False,
+            thinking=False,
+        ),
+        "high": EffortLevelConfig(
+            research_workers=3,
+            max_research_rounds=2,
+            max_fetch_per_worker=5,
+            max_clarifications=2,
+            max_midresearch_questions=1,
+            revisions=1,
+            critique=True,
+            thinking=True,
+        ),
+        "ultra": EffortLevelConfig(
+            research_workers=5,
+            max_research_rounds=3,
+            max_fetch_per_worker=8,
+            max_clarifications=3,
+            max_midresearch_questions=2,
+            revisions=2,
+            critique=True,
+            thinking=True,
+        ),
+    }
+
+
+class EffortConfig(BaseModel):
+    """The effort master dial (Phase 3.5): one knob controlling the whole loop's intensity.
+
+    ``levels`` maps ``"low"``/``"high"``/``"ultra"`` to their :class:`EffortLevelConfig`.
+    ``level_for`` resolves a level name (or an ``EffortLevel`` StrEnum, which equals its value)
+    to its config, falling back to ``default`` then to safe defaults so an unknown/typo'd level
+    never silently runs shallow. Post-hardware-upgrade the user just edits these numbers +
+    ``worker_concurrency`` — zero code change to scale (SPEC §15.5).
+    """
+
+    default: str = "high"  # used when auto-detect is unsure (never silently shallow)
+    critique_min_score: int = Field(default=75, ge=0, le=100)
+    worker_concurrency: int = Field(default=2, ge=1)  # workers truly running at once
+    levels: dict[str, EffortLevelConfig] = Field(default_factory=_default_effort_levels)
+
+    def level_for(self, level: str) -> EffortLevelConfig:
+        """Resolve a level name to its config (falls back to ``default`` then safe defaults)."""
+        key = str(level).strip().lower()
+        if key in self.levels:
+            return self.levels[key]
+        if self.default in self.levels:
+            return self.levels[self.default]
+        return EffortLevelConfig()
+
+
 class ColorsConfig(BaseModel):
     """Neura color palette + Excel color coding (used from Phase 4)."""
 
@@ -121,6 +201,7 @@ class AppConfig(BaseModel):
     research: ResearchConfig = Field(default_factory=ResearchConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     agent: AgentConfig = Field(default_factory=AgentConfig)
+    effort: EffortConfig = Field(default_factory=EffortConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)

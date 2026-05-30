@@ -349,3 +349,51 @@
 
 ### PHASE 3 STATUS: ✅ COMPLETE
 ---
+
+## PHASE 3.5 — Advanced Agent Loop (Effort · Multi-Agent Deep Research · Self-Correction)
+**Executed by**: Opus (claude-opus-4-8)
+**Date**: 2026-05-30
+**Session status**: IN PROGRESS
+**Authority**: user-authorized amendment to the LOCKED SPEC — `PHASE_3.5_PLAN.md` v1.0 (APPROVED),
+recorded in SPEC §15.5 + WORKFLOW §2.
+
+### Phase Plan (created at session start — 11 atomic tasks, 1 commit each `phase-3.5: …`)
+[x] 1. Scope + effort config: SPEC §15.5 + WORKFLOW row + `EffortConfig`/`EffortLevelConfig`
+       (config.py + config.yaml) + test_config + this PROGRESS plan (done 2026-05-30)
+[ ] 2. Models: `EffortLevel` + `Intent.effort`; research.py (`Confidence`/`Finding`/`WorkerFindings`/
+       `CoverageGap`/`CoverageReport`/`ResearchReport`); synthesis.py (`Critique`/`CriterionResult`
+       + `PipelineResult` extension); refactor `synthesizer.parse_analysis`; update touched tests
+[ ] 3. Deep-research playbook: author `playbooks/deep_research_playbook.md` (user reviews) + extend
+       `Playbooks` loader (4th file, fail-fast) + tests
+[ ] 4. Effort detection + override: `detect_effort` in intent_parser + `parse_effort_override`
+       (`/effort` REPL) + `analyze --effort` + clarification budget from effort + tests
+[ ] 5. Interaction `ask_text` (protocol + ReplInteraction + AutoInteraction) + tests
+[ ] 6. ResearchWorker (deep-research loop, source validation, isolated failure) + tests
+[ ] 7. ResearchManager (decompose, parallel orchestration, aggregation, mid-research clarification) + tests
+[ ] 8. Critic + revision (`core/critic.py`, effort-gated, source-validation rubric, fail-open) + tests
+[ ] 9. Pipeline + presentation (full master loop wiring; render_result telemetry; `analyze --effort`;
+       REPL `/effort`) + test_pipeline/test_intake updates
+[ ] 10. Quality gate (ruff + mypy --strict + full pytest green) + live runs (ultra multi-agent,
+        auto-effort, mid-research, config-scalable) + document
+[ ] 11. Docs (README + full Phase-3.5 handoff) + `git push origin main`
+
+### Runtime reality at session start (read-only checks, 2026-05-30)
+- Ollama ✅ HTTP 200 (gemma4:e4b present). SearXNG ✅ HTTP 200 JSON on :8888. venv + deps ✅.
+- All 88 Phase-3 tests pass before any new code (RULE 11). ruff/mypy assumed clean (verified per task).
+
+### Architecture (target master loop)
+`intake (parse /effort) → parse_intent + auto-detect effort → upfront clarify (≤ effort) →
+research plan + effort shown → confirm → ResearchManager.run(effort) [decompose → N parallel
+workers (deep-research playbook: recency/authority/cross-ref → Findings) → mid-research Qs →
+aggregate ResearchReport] → synthesize (brain + playbooks + findings) → if effort.critique:
+critique → revise loop → quality_check → PipelineResult (effort, critique, revisions, telemetry)`.
+Advisory layers fail-open; hard deps fail-fast. Concurrency config-gated (`effort.worker_concurrency`).
+
+### Key Technical Decisions Made (Phase 3.5)
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Effort as master dial | `EffortConfig.levels[low/high/ultra]` in config.yaml; `level_for()` resolves a level (or `EffortLevel` StrEnum, which equals its value) with safe fallback to `default` | Single knob, everything config-driven per level; scales to server/bigger model with zero code change (SPEC §15.5). Auto-detect defaults to HIGH — never silently shallow (RULE 9). |
+| `level_for` accepts `str` | config.py stays decoupled from models (no import of `EffortLevel`) | StrEnum members equal their string value, so passing an `EffortLevel` works seamlessly; avoids a config→models dependency. |
+
+### PHASE 3.5 STATUS: ⏳ IN PROGRESS
+---

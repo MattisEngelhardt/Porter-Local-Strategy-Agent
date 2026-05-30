@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from core.config import AppConfig, LLMConfig, load_config
+from core.config import AppConfig, EffortConfig, LLMConfig, load_config
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -54,3 +54,38 @@ def test_num_ctx_must_be_positive() -> None:
     """num_ctx is validated as > 0."""
     with pytest.raises(ValueError):
         LLMConfig(num_ctx=0)
+
+
+# --- effort master dial (Phase 3.5) ------------------------------------------------------
+def test_effort_block_loads_three_levels() -> None:
+    """config.yaml defines the low/high/ultra effort levels with the planned values."""
+    config = load_config(CONFIG_PATH)
+    effort = config.effort
+    assert effort.default == "high"
+    assert effort.critique_min_score == 75
+    assert effort.worker_concurrency >= 1
+    assert set(effort.levels) >= {"low", "high", "ultra"}
+    assert effort.levels["low"].research_workers == 1
+    assert effort.levels["low"].critique is False
+    assert effort.levels["ultra"].research_workers == 5
+    assert effort.levels["ultra"].max_research_rounds == 3
+    assert effort.levels["high"].critique is True
+
+
+def test_effort_level_for_resolves_and_falls_back() -> None:
+    """level_for resolves a known level and falls back to the default for unknown ones."""
+    effort = EffortConfig()
+    assert effort.level_for("low").research_workers == 1
+    assert effort.level_for("ULTRA").research_workers == 5  # case-insensitive
+    # Unknown level → falls back to the configured default ("high").
+    assert effort.level_for("nonsense").research_workers == effort.levels["high"].research_workers
+
+
+def test_effort_defaults_are_never_shallow() -> None:
+    """An EffortLevelConfig with no fields set mirrors the safe 'high' profile (RULE 9)."""
+    from core.config import EffortLevelConfig
+
+    level = EffortLevelConfig()
+    assert level.research_workers == 3
+    assert level.critique is True
+    assert level.thinking is True

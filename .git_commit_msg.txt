@@ -1,0 +1,9 @@
+﻿phase-3.5: scope governance + effort master-dial config
+
+- SPEC §15.5 (user-authorized Phase 3.5 amendment) + WORKFLOW §2 phase row
+- EffortLevelConfig + EffortConfig (level_for with safe fallback) in core/config.py
+- config.yaml effort block (low/high/ultra + worker_concurrency + critique_min_score)
+- test_config: 3 effort tests; PROGRESS Phase 3.5 plan + decisions
+- commit PHASE_3.5_PLAN.md (approved plan)
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>

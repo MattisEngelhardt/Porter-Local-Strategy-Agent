@@ -71,6 +71,7 @@ Execute this sequence before doing anything else. Do not skip steps.
 | 1 | Foundation | LocalLLMClient + Pydantic models + CLI + Docker compose + startup checks | `python main.py ask "test"` returns LLM response. Backend switchable via config only. |
 | 2 | Research Engine | SearXNG client + pdf_reader + content fetcher + cache + parallel async | `python main.py research "query"` returns real web results. `python main.py analyze-doc file.pdf` returns extracted facts. |
 | 3 | Agent Brain | Intent parser + bilingual clarification + multi-step reasoning + Neura Brain injection | Agent asks ≤2 questions then produces structured analysis for complex M&A query in correct language. |
+| 3.5 | Advanced Agent Loop | Effort master dial (low/high/ultra) + multi-agent deep research (orchestrator-workers) + deep_research_playbook + mid-research clarification + output critic/revision (user-authorized amendment, SPEC §15.5) | `analyze --effort ultra` → N parallel workers, rounds, critique+revision; auto-effort + `/effort` override; config-scalable; tests/ruff/mypy green. |
 | 4 | Output Generation | Jinja2 templates (T-1 to T-5, DE+EN) + PDF + PPTX (all 10 slide types, Neura colors) | One query → professional PDF brief + editable .pptx with Neura styling + logo bottom-right. |
 | 5 | Memory + Voice + Polish | ChromaDB RAG + Voice Ctrl+Space + Delta analysis + End-to-end production quality | Second run on same entity shows delta. Voice works. Zero errors end-to-end. Both DE and EN. |
 
