@@ -201,7 +201,7 @@
 
 ### Phase Plan (created at session start)
 [x] 1. Env + verify Phase-2 live gates (Tesseract→PATH, research/OCR), set max_clarification_rounds=3 (done 2026-05-30)
-[ ] 2. Playbooks (3 .md verbatim §13) + core/playbooks.py loader + test_playbooks.py
+[x] 2. Playbooks (3 .md verbatim §13) + core/playbooks.py loader + test_playbooks.py (done — 4 tests)
 [ ] 3. core/memory.py load_brain (read-only brain.md injection) + test_memory.py
 [ ] 4. models additions (ResearchPlan, PipelineResult) + core/intent_parser.py + test_intent_parser.py
 [ ] 5. core/clarification.py (budget, multi-dim bilingual, one-at-a-time loop) + test_clarification.py
