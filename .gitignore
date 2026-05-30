@@ -33,3 +33,4 @@ searxng-data/
 
 # Docker tutorial (not part of the project)
 welcome-to-docker/
+.git_commit_msg.txt
