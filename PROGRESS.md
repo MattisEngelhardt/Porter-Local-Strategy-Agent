@@ -206,7 +206,7 @@
 [x] 4. models additions (ResearchPlan, PipelineResult) + core/intent_parser.py + test_intent_parser.py (done — 10 tests + live-verified)
 [x] 5. core/clarification.py (budget, multi-dim bilingual, one-at-a-time loop) + test_clarification.py (done — 7 tests)
 [x] 6. core/synthesizer.py (brain+playbook injection, thinking-by-depth, robust JSON) + test_synthesizer.py (done — 8 tests)
-[ ] 7. core/pipeline.py (Interaction, plan_subqueries, full chain, decline path) + test_pipeline.py
+[x] 7. core/pipeline.py (Interaction, plan_subqueries, full chain, decline path) + test_pipeline.py (done — 6 tests)
 [ ] 8. Wire-up: REPL → pipeline, main.py analyze command, keep ask
 [ ] 9. Quality gate: ruff + mypy --strict + full pytest green
 [ ] 10. Docs + Phase 3 handoff + git push origin main
