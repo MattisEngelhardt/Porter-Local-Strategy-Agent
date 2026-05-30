@@ -382,7 +382,12 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        → mid-research clarification (detect blocking ambiguity → `ask_text` → targeted re-run, ≤
        max_midresearch_questions, fail-open) → aggregate ResearchReport + telemetry; SearXNG
        all-worker-fail re-raises SearXNGError (fail-fast). +5 tests (done 2026-05-30)
-[ ] 8. Critic + revision (`core/critic.py`, effort-gated, source-validation rubric, fail-open) + tests
+[x] 8. Critic + revision (`core/critic.py`): `critique` scores a draft 0-100 against a 9-point
+       rubric (output + deep-research playbooks injected: sourced / financials≥2 / recency /
+       assumptions / Neura-Lens / bottom-line-first / framework / language / no-filler),
+       `use_thinking=True`, passed=score≥min_score, fail-open (LLM/parse → passing "unavailable");
+       `revise` reuses synthesizer.build_system_prompt + evidence + parse_analysis, fail-open keeps
+       draft. +7 tests (done 2026-05-30)
 [ ] 9. Pipeline + presentation (full master loop wiring; render_result telemetry; `analyze --effort`;
        REPL `/effort`) + test_pipeline/test_intake updates
 [ ] 10. Quality gate (ruff + mypy --strict + full pytest green) + live runs (ultra multi-agent,
