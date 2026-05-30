@@ -364,8 +364,9 @@ recorded in SPEC §15.5 + WORKFLOW §2.
        `CoverageGap`/`CoverageReport`/`ResearchReport`); synthesis.py (`Critique`/`CriterionResult`
        + `PipelineResult` extension); refactor `synthesizer.parse_analysis`; tests (done 2026-05-30
        — test_models.py +8, parse_analysis test; 99 tests, mypy/ruff clean)
-[ ] 3. Deep-research playbook: author `playbooks/deep_research_playbook.md` (user reviews) + extend
-       `Playbooks` loader (4th file, fail-fast) + tests
+[x] 3. Deep-research playbook: authored `playbooks/deep_research_playbook.md` (**USER REVIEW
+       PENDING** — authored content per RULE 14) + extended `Playbooks` loader (4th file,
+       fail-fast) + tests (done 2026-05-30 — Playbooks.deep_research; test_playbooks +2)
 [ ] 4. Effort detection + override: `detect_effort` in intent_parser + `parse_effort_override`
        (`/effort` REPL) + `analyze --effort` + clarification budget from effort + tests
 [ ] 5. Interaction `ask_text` (protocol + ReplInteraction + AutoInteraction) + tests

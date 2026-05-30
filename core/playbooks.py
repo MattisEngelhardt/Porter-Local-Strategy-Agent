@@ -23,6 +23,7 @@ _PLAYBOOKS_DIR = Path(__file__).resolve().parent.parent / "playbooks"
 _RESEARCH_FILE = "research_playbook.md"
 _ANALYSIS_FILE = "analysis_playbook.md"
 _OUTPUT_FILE = "output_playbook.md"
+_DEEP_RESEARCH_FILE = "deep_research_playbook.md"  # Phase 3.5 (SPEC §15.5)
 
 
 class PlaybooksError(Exception):
@@ -30,11 +31,16 @@ class PlaybooksError(Exception):
 
 
 class Playbooks(BaseModel):
-    """The three synthesis rulebooks, loaded as raw markdown text (SPEC §13)."""
+    """The four synthesis/research rulebooks, loaded as raw markdown text (SPEC §13 + §15.5).
+
+    ``deep_research`` is the Phase-3.5 worker/manager methodology; it is injected into the
+    research workers, while ``research``/``analysis``/``output`` drive synthesis.
+    """
 
     research: str
     analysis: str
     output: str
+    deep_research: str
 
 
 def _read_playbook(directory: Path, filename: str) -> str:
@@ -60,6 +66,7 @@ def _load_cached(directory_str: str) -> Playbooks:
         research=_read_playbook(directory, _RESEARCH_FILE),
         analysis=_read_playbook(directory, _ANALYSIS_FILE),
         output=_read_playbook(directory, _OUTPUT_FILE),
+        deep_research=_read_playbook(directory, _DEEP_RESEARCH_FILE),
     )
 
 
