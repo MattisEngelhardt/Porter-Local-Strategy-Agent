@@ -31,7 +31,7 @@ memory:
 
 agent:
   default_language: "auto"             # "auto" | "de" | "en"
-  max_clarification_rounds: 2
+  max_clarification_rounds: 3          # user-authorized override of SPEC §5.2 (was 2)
   show_research_plan: true
 
 output:

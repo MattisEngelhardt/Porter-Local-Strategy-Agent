@@ -193,3 +193,42 @@
 
 ### PHASE 2 STATUS: ✅ COMPLETE
 ---
+
+## PHASE 3 — Agent Brain (Intent + Dialog + Reasoning)
+**Executed by**: Opus (claude-opus-4-8)
+**Date**: 2026-05-30
+**Session status**: IN PROGRESS
+
+### Phase Plan (created at session start)
+[x] 1. Env + verify Phase-2 live gates (Tesseract→PATH, research/OCR), set max_clarification_rounds=3 (done 2026-05-30)
+[ ] 2. Playbooks (3 .md verbatim §13) + core/playbooks.py loader + test_playbooks.py
+[ ] 3. core/memory.py load_brain (read-only brain.md injection) + test_memory.py
+[ ] 4. models additions (ResearchPlan, PipelineResult) + core/intent_parser.py + test_intent_parser.py
+[ ] 5. core/clarification.py (budget, multi-dim bilingual, one-at-a-time loop) + test_clarification.py
+[ ] 6. core/synthesizer.py (brain+playbook injection, thinking-by-depth, robust JSON) + test_synthesizer.py
+[ ] 7. core/pipeline.py (Interaction, plan_subqueries, full chain, decline path) + test_pipeline.py
+[ ] 8. Wire-up: REPL → pipeline, main.py analyze command, keep ask
+[ ] 9. Quality gate: ruff + mypy --strict + full pytest green
+[ ] 10. Docs + Phase 3 handoff + git push origin main
+
+### Runtime reality at session start (read-only checks)
+- Ollama ✅ (gemma4:e4b present). SearXNG ✅ HTTP 200 JSON on :8888. venv + Phase-2 deps ✅.
+- Tesseract ✅ installed at `C:\Program Files\Tesseract-OCR` and on the persistent **user PATH**
+  (the harness shell inherited a frozen env from before the PATH change — so already-open
+  terminals need a restart; new terminals resolve `tesseract` automatically).
+
+### Key Technical Decisions Made (Phase 3)
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| max_clarification_rounds | **3** (config.yaml; Pydantic default stays 2) | User-authorized override of SPEC §5.2. Questions scale with complexity (quick 0–1, standard 1–2, complex ≤3), asked one-at-a-time, each multi-dimensional. |
+| Tesseract resolution | **PATH only** (no pdf_reader code change) | User instruction ("put it on the PATH"). Already on persistent user PATH; OCR verified live with session PATH set. |
+| Language detection | Deterministic heuristic (umlauts + German function words), config override | Robust; never depend on LLM JSON for language (SPEC REQ-5 fail-safe). |
+
+### Task 1 — Live gate verification (2026-05-30)
+- `analyze-doc <image.png>` (long text) → **`method: ocr`**, full text transcribed (Tesseract 5.4.0). ✅
+- `analyze-doc <image.png>` (short text) → OCR < 50 chars → **vision** fallback (gemma4) transcribed correctly. ✅ (cascade works)
+- `research "Figure AI funding 2026" --max-fetch 2` → 8 ranked results (tier classification working), 1 page fetched (~7228 words). ✅
+- All 44 prior tests still pass; config.yaml `agent.max_clarification_rounds: 3`.
+
+### PHASE 3 STATUS: ⏳ IN PROGRESS
+---

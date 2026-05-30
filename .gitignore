@@ -19,6 +19,9 @@ output/*
 data/chroma_db/*
 !data/chroma_db/.gitkeep
 
+# Research result cache (diskcache SQLite, Phase 2) — local only
+data/cache/
+
 # Logs
 logs/
 
