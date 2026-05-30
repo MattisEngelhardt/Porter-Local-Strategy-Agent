@@ -115,11 +115,14 @@ class LocalLLMClient:
             )
         return self._openai
 
-    def _build_messages(self, prompt: str, system: str, use_thinking: bool) -> list[dict[str, str]]:
+    def _build_messages(
+        self, prompt: str, system: str, use_thinking: bool, images: list[str] | None = None
+    ) -> list[dict[str, Any]]:
         """Build the chat messages, applying family-specific thinking-mode markers.
 
         gemma: prepend ``<|think|>`` to the system prompt. qwen: append ``/think`` (or
-        ``/no_think``) to the user prompt (SPEC §9 N-2).
+        ``/no_think``) to the user prompt (SPEC §9 N-2). When ``images`` is given, the
+        base64 images are attached to the user message (Ollama native vision format).
         """
         system_text = system
         user_text = prompt
@@ -132,10 +135,13 @@ class LocalLLMClient:
         elif self._family == "qwen":
             user_text = f"{prompt} /no_think"
 
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         if system_text:
             messages.append({"role": "system", "content": system_text})
-        messages.append({"role": "user", "content": user_text})
+        user_message: dict[str, Any] = {"role": "user", "content": user_text}
+        if images:
+            user_message["images"] = images
+        messages.append(user_message)
         return messages
 
     def _connection_error(self, exc: Exception) -> LLMConnectionError:
@@ -175,6 +181,7 @@ class LocalLLMClient:
         use_thinking: bool | None = None,
         num_ctx: int | None = None,
         stream: bool = False,
+        images: list[str] | None = None,
     ) -> str:
         """Generate a completion and return the full text.
 
@@ -184,20 +191,27 @@ class LocalLLMClient:
             use_thinking: Enable thinking mode. ``None`` uses the config default.
             num_ctx: Context window. ``None`` uses the config default. ALWAYS sent.
             stream: If True, use the streaming transport (text is still returned whole).
+            images: Optional base64-encoded images for vision input (Ollama only).
 
         Returns:
             The model's response text.
 
         Raises:
             LLMConnectionError: If the backend is unreachable.
-            LLMError: For other backend/transport failures.
+            LLMError: For other backend/transport failures, or images on a non-Ollama backend.
         """
         if stream:
             return "".join(self.stream_generate(prompt, system, use_thinking, num_ctx))
 
+        if images and self._provider != _OLLAMA_PROVIDER:
+            raise LLMError(
+                "Image/vision input is only supported on the Ollama provider in Phase 2 "
+                f"(provider={self._provider}). Set llm.provider to 'ollama' for vision."
+            )
+
         resolved_thinking = self._thinking_default if use_thinking is None else use_thinking
         resolved_num_ctx = self._num_ctx if num_ctx is None else num_ctx
-        messages = self._build_messages(prompt, system, resolved_thinking)
+        messages = self._build_messages(prompt, system, resolved_thinking, images)
 
         if self._provider == _OLLAMA_PROVIDER:
             payload: dict[str, Any] = {
@@ -261,7 +275,7 @@ class LocalLLMClient:
         except Exception as exc:
             raise self._wrap_openai_error(exc) from exc
 
-    def _stream_ollama(self, messages: list[dict[str, str]], num_ctx: int) -> Iterator[str]:
+    def _stream_ollama(self, messages: list[dict[str, Any]], num_ctx: int) -> Iterator[str]:
         """Stream from Ollama's native /api/chat (NDJSON), yielding content chunks."""
         url = f"{self._base_url}/api/chat"
         payload = {

@@ -153,6 +153,30 @@ def test_thinking_defaults_to_config() -> None:
     assert captured[0]["messages"][0]["content"].startswith("<|think|>")
 
 
+# ---------------------------------------------------------------------- vision
+def test_images_attached_to_user_message_ollama() -> None:
+    """Base64 images are attached to the user message on the Ollama path."""
+    client = LocalLLMClient(_ollama_config())
+    captured: list[dict[str, Any]] = []
+    _capture_post(client, captured)
+
+    client.generate("describe this", images=["B64DATA"], use_thinking=False)
+
+    user_message = captured[0]["messages"][-1]
+    assert user_message["role"] == "user"
+    assert user_message["images"] == ["B64DATA"]
+
+
+def test_images_rejected_on_non_ollama_backend() -> None:
+    """Passing images to a non-Ollama backend fails fast with a clear error."""
+    from llm.local_llm_client import LLMError
+
+    client = LocalLLMClient(_ollama_config(provider="lmstudio", base_url="http://localhost:1234"))
+    with pytest.raises(LLMError) as excinfo:
+        client.generate("describe", images=["B64DATA"])
+    assert "vision" in str(excinfo.value).lower()
+
+
 # ---------------------------------------------------------------- connection error
 def test_connection_error_is_fail_fast() -> None:
     """An unreachable backend raises LLMConnectionError with fix instructions."""
