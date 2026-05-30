@@ -23,7 +23,9 @@ from rich.panel import Panel
 from rich.table import Table
 
 from core.config import AppConfig, load_config
-from core.intake import run_repl
+from core.excel_reader import ExcelReadError
+from core.intake import read_document, render_document, run_repl
+from core.pdf_reader import PdfReadError
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -174,6 +176,28 @@ def research(
     if bundle.from_cache:
         summary += "  [dim](served from 24h cache)[/dim]"
     console.print(Panel(summary, title="summary", border_style=accent))
+
+
+@app.command(name="analyze-doc")
+def analyze_doc(
+    ctx: typer.Context,
+    doc_path: Annotated[Path, typer.Argument(help="Path to a PDF / image / .xlsx file")],
+) -> None:
+    """Read a document and print its extracted content (no synthesis — Phase 2)."""
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)  # LLM client enables the vision fallback
+
+    try:
+        with console.status("[dim]reading document…[/dim]", spinner="dots"):
+            doc = read_document(doc_path, llm=client)
+    except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    render_document(console, doc, config.output.colors.accent_cyan)
 
 
 if __name__ == "__main__":

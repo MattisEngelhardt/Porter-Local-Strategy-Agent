@@ -160,9 +160,7 @@ async def test_fetch_one_extracts_clean_text(monkeypatch: pytest.MonkeyPatch) ->
     fetcher = ContentFetcher(_config())
     session = _FakeSession(_FakeResp(text_payload="<html><body>x</body></html>"))
 
-    monkeypatch.setattr(
-        "core.researcher.trafilatura.extract", lambda *a, **k: "hello clean world"
-    )
+    monkeypatch.setattr("core.researcher.trafilatura.extract", lambda *a, **k: "hello clean world")
     content = await fetcher._fetch_one("https://x.com", session)  # type: ignore[arg-type]
     assert content is not None
     assert content.word_count == 3
@@ -227,7 +225,9 @@ async def test_engine_run_ranks_and_reports_cache(monkeypatch: pytest.MonkeyPatc
 # ------------------------------------------------------------------- live test
 def _searxng_reachable(url: str) -> bool:
     try:
-        resp = httpx.get(f"{url.rstrip('/')}/search", params={"q": "t", "format": "json"}, timeout=2.0)
+        resp = httpx.get(
+            f"{url.rstrip('/')}/search", params={"q": "t", "format": "json"}, timeout=2.0
+        )
         resp.raise_for_status()
         resp.json()
         return True

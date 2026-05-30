@@ -166,9 +166,7 @@ class SearXNGClient:
             for item in hits[:limit]
         ]
 
-    async def search_many(
-        self, queries: list[SearchQuery]
-    ) -> list[tuple[str, list[SearchResult]]]:
+    async def search_many(self, queries: list[SearchQuery]) -> list[tuple[str, list[SearchResult]]]:
         """Run queries in parallel (bounded by ``parallel_queries``).
 
         Returns ``(query_text, results)`` pairs. Per-query failures yield an empty
@@ -207,7 +205,7 @@ class SearXNGClient:
                 "  1. Start SearXNG: 'docker compose up -d' (needs Docker Desktop).\n"
                 "  2. Enable JSON output in searxng-data/settings.yml: "
                 "'search: {formats: [html, json]}'.\n"
-                f"  3. Verify: curl \"{self._base_url}/search?q=test&format=json\".\n"
+                f'  3. Verify: curl "{self._base_url}/search?q=test&format=json".\n'
                 f"First error: {errors[0]!r}"
             ) from errors[0]
         return pairs
@@ -222,15 +220,13 @@ class ContentFetcher:
         self._max_fetch = config.max_fetch_per_run
         self._timeout = aiohttp.ClientTimeout(total=30.0)
 
-    async def _fetch_one(
-        self, url: str, session: aiohttp.ClientSession
-    ) -> FetchedContent | None:
+    async def _fetch_one(self, url: str, session: aiohttp.ClientSession) -> FetchedContent | None:
         """Fetch one URL and extract clean text; return ``None`` on any failure."""
         try:
             async with session.get(url, headers=_USER_AGENT) as resp:
                 resp.raise_for_status()
                 html = await resp.text()
-        except (aiohttp.ClientError, asyncio.TimeoutError, UnicodeDecodeError):
+        except (TimeoutError, aiohttp.ClientError, UnicodeDecodeError):
             return None
 
         text = await asyncio.to_thread(
