@@ -1,0 +1,29 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Agent brain — local only, may contain confidential Neura context (SPEC N-9)
+brain.md
+
+# Generated outputs (keep the directory, ignore its contents)
+output/*
+!output/.gitkeep
+
+# Persistent memory store (keep the directory, ignore its contents)
+data/chroma_db/*
+!data/chroma_db/.gitkeep
+
+# Logs
+logs/
+
+# Secrets (no external keys needed, but never commit)
+.env
+
+# SearXNG runtime data (Phase 2)
+searxng-data/
