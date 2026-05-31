@@ -119,3 +119,34 @@ class TrackerData(BaseModel):
     title: str
     language: Language
     items: list[TrackerItem] = Field(default_factory=list)
+
+
+class CaseAssumption(BaseModel):
+    """One yellow input assumption of the E-3 business-case model (Assumptions + audit tabs)."""
+
+    name: str
+    value: float = 0.0
+    unit: str = ""  # e.g. "EUR", "%", "units", "months"
+    source: str = ""  # provenance for the Sources & Audit Trail tab
+    confidence: str = ""  # High | Medium | Estimate
+
+
+class BusinessCaseData(BaseModel):
+    """Structured input for the E-3 Business Case financial model (5 formula-linked tabs).
+
+    The ``year_*`` revenue/cost fields are the headline drivers; ``assumptions`` are extra labelled
+    yellow inputs surfaced on the Assumptions tab + audited on the Sources tab. Everything else in
+    the workbook is a formula referencing these (N-10).
+    """
+
+    title: str
+    language: Language
+    years: int = 3  # projection horizon (annual)
+    investment: float = 0.0  # one-time upfront investment (EUR)
+    revenue_year1: float = 0.0
+    revenue_growth: float = 0.3  # YoY revenue growth rate
+    opex_year1: float = 0.0
+    opex_growth: float = 0.15  # YoY opex growth rate
+    discount_rate: float = 0.12  # for NPV
+    assumptions: list[CaseAssumption] = Field(default_factory=list)
+    bottom_line: str = ""  # the written 2-sentence recommendation for the Summary tab

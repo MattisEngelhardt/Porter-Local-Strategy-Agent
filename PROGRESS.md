@@ -611,7 +611,9 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 [x] 6. excel_builder E-2 Benchmark (Excel Table+auto-filter+Sources) + E-4 Tracker (Dashboard
        COUNTIF formulas, Status/Priority data-validation dropdowns, cond-fmt, Archive)
        (done 2026-05-31 — 163 green)
-[ ] 7. excel_builder E-3 Business Case 5-tab model (NPV/IRR/payback, formula integrity N-10)
+[x] 7. excel_builder E-3 Business Case 5-tab model (Summary NPV/IRR formulas, Assumptions all
+       yellow, Projections/Scenarios formula-linked, Sources audit) — N-10 verified (done 2026-05-31
+       — 169 green; data_only re-open returns None for NPV → pure formulas)
 [ ] 8. `content_shaper.shape_workbook` (per-template structured data via LLM + fail-open fallback)
 [ ] 9. Pipeline wiring: generalize `_render_outputs` (3 formats + shaping); render in research path
        too; business-case dual output (N-6); `render_result` "Phase 4" cleanup

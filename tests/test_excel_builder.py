@@ -15,6 +15,7 @@ from core.config import AppConfig
 from core.excel_builder import (
     ExcelBuildError,
     build_benchmark_table,
+    build_business_case,
     build_decision_matrix,
     build_tracker,
 )
@@ -23,6 +24,8 @@ from models.workbook import (
     BenchmarkData,
     BenchmarkRow,
     BenchmarkSource,
+    BusinessCaseData,
+    CaseAssumption,
     DecisionMatrixData,
     EntityScores,
     ScoringCriterion,
@@ -189,3 +192,85 @@ def test_tracker_prepopulates_items(tmp_path: Path) -> None:
     tracker = load_workbook(str(path))["Tracker"]
     assert tracker["A4"].value == "Dexory"
     assert tracker["C4"].value == "Active"
+
+
+# ----------------------------------------------------------------- E-3 Business Case Model
+def _business_case(language: Language = Language.EN) -> BusinessCaseData:
+    return BusinessCaseData(
+        title="Japan Expansion",
+        language=language,
+        years=3,
+        investment=2_000_000,
+        revenue_year1=1_500_000,
+        revenue_growth=0.4,
+        opex_year1=900_000,
+        opex_growth=0.15,
+        discount_rate=0.12,
+        assumptions=[
+            CaseAssumption(
+                name="Market size",
+                value=500_000_000,
+                unit="EUR",
+                source="JETRO 2026",
+                confidence="Medium",
+            )
+        ],
+        bottom_line="Positive NPV by year 3; recommend phased entry.",
+    )
+
+
+def test_business_case_has_five_tabs(tmp_path: Path) -> None:
+    """E-3 has the 5 SPEC §12 tabs (Summary/Assumptions/Projections/Scenarios/Sources)."""
+    path = build_business_case(_business_case(), AppConfig(), tmp_path)
+    assert path.suffix == ".xlsx"
+    wb = load_workbook(str(path))
+    assert wb.sheetnames == ["Summary", "Assumptions", "Projections", "Scenarios", "Sources"]
+
+
+def test_business_case_assumptions_are_yellow_inputs(tmp_path: Path) -> None:
+    """All core drivers live on the Assumptions tab as yellow input cells."""
+    config = AppConfig()
+    path = build_business_case(_business_case(), config, tmp_path)
+    a = load_workbook(str(path))["Assumptions"]
+    yellow = config.output.colors.excel_input_cell.lstrip("#").upper()
+    assert a["B4"].value == 2_000_000  # investment
+    assert a["B5"].value == 1_500_000  # revenue year 1
+    assert a["B4"].fill.fgColor.rgb.endswith(yellow)
+    assert a["B5"].fill.fgColor.rgb.endswith(yellow)
+
+
+def test_business_case_projections_reference_assumptions(tmp_path: Path) -> None:
+    """Projections are formulas referencing the Assumptions tab — no hardcoded numbers (N-10)."""
+    path = build_business_case(_business_case(), AppConfig(), tmp_path)
+    p = load_workbook(str(path))["Projections"]
+    assert p["B7"].value == "=Assumptions!$B$5"  # year 1 revenue = assumption
+    assert p["B8"].value == "=B7*(1+Assumptions!$B$6)"  # year 2 grows by the growth assumption
+    assert p["D7"].value == "=B7-C7"  # EBITDA = revenue - opex
+    assert p["F7"].value == "=F6+E7"  # cumulative cash flow
+
+
+def test_business_case_summary_npv_irr_formulas(tmp_path: Path) -> None:
+    """The Summary tab computes NPV and IRR via Excel functions over the projected cash flows."""
+    path = build_business_case(_business_case(), AppConfig(), tmp_path)
+    s = load_workbook(str(path))["Summary"]
+    npv = s["B6"].value
+    irr = s["B7"].value
+    assert isinstance(npv, str) and npv.startswith("=-Assumptions!$B$4+NPV(")
+    assert isinstance(irr, str) and "IRR(Projections!" in irr
+
+
+def test_business_case_scenarios_use_yellow_multipliers(tmp_path: Path) -> None:
+    """Each scenario's NPV is a formula scaling projections by yellow multiplier inputs."""
+    config = AppConfig()
+    path = build_business_case(_business_case(), config, tmp_path)
+    sc = load_workbook(str(path))["Scenarios"]
+    yellow = config.output.colors.excel_input_cell.lstrip("#").upper()
+    assert sc["B7"].fill.fgColor.rgb.endswith(yellow)  # revenue factor is a yellow input
+    assert isinstance(sc["D7"].value, str) and sc["D7"].value.startswith("=-Assumptions!$B$4+NPV(")
+
+
+def test_business_case_no_cached_values(tmp_path: Path) -> None:
+    """A data_only re-open returns None for the headline metrics (proves pure formulas, N-10)."""
+    path = build_business_case(_business_case(), AppConfig(), tmp_path)
+    s = load_workbook(str(path), data_only=True)["Summary"]
+    assert s["B6"].value is None  # NPV is a formula, never a hardcoded value

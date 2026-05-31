@@ -27,6 +27,7 @@ from core.config import AppConfig
 from models.task import Language
 from models.workbook import (
     BenchmarkData,
+    BusinessCaseData,
     DecisionMatrixData,
     TrackerData,
 )
@@ -566,5 +567,322 @@ def build_tracker(data: TrackerData, config: AppConfig, output_dir: str | Path) 
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{date.today().isoformat()}_{_slug(data.title)}_tracker.xlsx"
+    wb.save(str(path))
+    return path
+
+
+# --------------------------------------------------------------- E-3 Business Case Model
+# Assumptions tab layout: each driver lives in a named cell so every other tab references it.
+# Rows (1-based) on the Assumptions sheet:
+_A = {
+    "investment": 4,
+    "revenue_year1": 5,
+    "revenue_growth": 6,
+    "opex_year1": 7,
+    "opex_growth": 8,
+    "discount_rate": 9,
+}
+_ASSUMPTION_VALUE_COL = "B"  # yellow input column on the Assumptions tab
+_EXTRA_ASSUMPTION_ROW = 11  # extra labelled assumptions start here
+
+
+def _aref(key: str) -> str:
+    """Absolute reference to a core assumption's yellow input cell (e.g. ``Assumptions!$B$5``)."""
+    return f"Assumptions!${_ASSUMPTION_VALUE_COL}${_A[key]}"
+
+
+def _assumptions_sheet(ws: Worksheet, style: _Style, data: BusinessCaseData) -> None:
+    """Write the Assumptions tab — ALL yellow inputs; every other tab references these (N-10)."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Annahmen", "Assumptions"),
+        _t(
+            language,
+            "NUR gelbe Zellen bearbeiten — alle anderen Tabs rechnen daraus neu.",
+            "Edit ONLY the yellow cells — every other tab recalculates from these.",
+        ),
+    )
+    rows = [
+        ("investment", _t(language, "Einmalinvestition", "One-time investment"), "EUR"),
+        ("revenue_year1", _t(language, "Umsatz Jahr 1", "Revenue Year 1"), "EUR"),
+        ("revenue_growth", _t(language, "Umsatzwachstum p.a.", "Revenue growth p.a."), "%"),
+        ("opex_year1", _t(language, "OpEx Jahr 1", "OpEx Year 1"), "EUR"),
+        ("opex_growth", _t(language, "OpEx-Wachstum p.a.", "OpEx growth p.a."), "%"),
+        ("discount_rate", _t(language, "Diskontsatz (NPV)", "Discount rate (NPV)"), "%"),
+    ]
+    values = {
+        "investment": data.investment,
+        "revenue_year1": data.revenue_year1,
+        "revenue_growth": data.revenue_growth,
+        "opex_year1": data.opex_year1,
+        "opex_growth": data.opex_growth,
+        "discount_rate": data.discount_rate,
+    }
+    for key, label, unit in rows:
+        row = _A[key]
+        ws.cell(row=row, column=1, value=label).font = style.bold
+        cell = ws.cell(row=row, column=2, value=values[key])
+        cell.fill = style.input_fill
+        cell.number_format = "0%" if unit == "%" else "#,##0"
+        ws.cell(row=row, column=3, value=unit).font = style.muted
+
+    # Extra labelled assumptions (also yellow), surfaced for the audit trail.
+    for offset, assumption in enumerate(data.assumptions):
+        row = _EXTRA_ASSUMPTION_ROW + offset
+        ws.cell(row=row, column=1, value=assumption.name).font = style.bold
+        cell = ws.cell(row=row, column=2, value=assumption.value)
+        cell.fill = style.input_fill
+        cell.number_format = "0%" if assumption.unit == "%" else "#,##0"
+        ws.cell(row=row, column=3, value=assumption.unit).font = style.muted
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 16
+    ws.column_dimensions["C"].width = 10
+
+
+def _projections_sheet(ws: Worksheet, style: _Style, data: BusinessCaseData) -> None:
+    """Write the Projections tab: annual Revenue/OpEx/EBITDA/Cash Flow — all formula-linked."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Projektionen", "Financial Projections"),
+        _t(language, "Formelbasiert aus 'Annahmen'.", "Formula-driven from 'Assumptions'."),
+    )
+    header_row = 5
+    labels = [
+        _t(language, "Jahr", "Year"),
+        _t(language, "Umsatz", "Revenue"),
+        _t(language, "OpEx", "OpEx"),
+        _t(language, "EBITDA", "EBITDA"),
+        _t(language, "Cashflow", "Cash Flow"),
+        _t(language, "Kumulierter Cashflow", "Cumulative Cash Flow"),
+    ]
+    for col, text in enumerate(labels, start=1):
+        cell = ws.cell(row=header_row, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+
+    # Year 0 = the upfront investment (negative cash flow), then N project years.
+    year0 = header_row + 1
+    ws.cell(row=year0, column=1, value=0).alignment = _CENTER
+    for col in (2, 3, 4):
+        ws.cell(row=year0, column=col, value=0)
+    cf0 = ws.cell(row=year0, column=5, value=f"=-{_aref('investment')}")
+    cf0.fill = style.formula_fill
+    cf0.number_format = "#,##0"
+    cum0 = ws.cell(row=year0, column=6, value="=E6")
+    cum0.fill = style.formula_fill
+    cum0.number_format = "#,##0"
+
+    for yr in range(1, data.years + 1):
+        row = year0 + yr
+        ws.cell(row=row, column=1, value=yr).alignment = _CENTER
+        if yr == 1:
+            revenue = f"={_aref('revenue_year1')}"
+            opex = f"={_aref('opex_year1')}"
+        else:
+            prev = row - 1
+            revenue = f"=B{prev}*(1+{_aref('revenue_growth')})"
+            opex = f"=C{prev}*(1+{_aref('opex_growth')})"
+        for col, formula in ((2, revenue), (3, opex)):
+            cell = ws.cell(row=row, column=col, value=formula)
+            cell.fill = style.formula_fill
+            cell.number_format = "#,##0"
+        ebitda = ws.cell(row=row, column=4, value=f"=B{row}-C{row}")
+        cashflow = ws.cell(row=row, column=5, value=f"=D{row}")
+        cumulative = ws.cell(row=row, column=6, value=f"=F{row - 1}+E{row}")
+        for cell in (ebitda, cashflow, cumulative):
+            cell.fill = style.formula_fill
+            cell.number_format = "#,##0"
+        # Colour cumulative cash flow green when positive, red when negative (breakeven visual).
+        ws.conditional_formatting.add(
+            f"F{row}", FormulaRule(formula=[f"F{row}>=0"], fill=style.positive_fill)
+        )
+        ws.conditional_formatting.add(
+            f"F{row}", FormulaRule(formula=[f"F{row}<0"], fill=style.negative_fill)
+        )
+    for col_letter in ("A", "B", "C", "D", "E", "F"):
+        ws.column_dimensions[col_letter].width = 18
+    ws.freeze_panes = "B6"
+
+
+def _last_projection_row(data: BusinessCaseData) -> int:
+    """Row index of the final project year on the Projections tab."""
+    return 6 + data.years  # header_row(5) + year0(6) is row 6; +years more rows
+
+
+def _summary_sheet(ws: Worksheet, style: _Style, data: BusinessCaseData) -> None:
+    """Write the Executive Summary tab: NPV / IRR / payback — all formulas over the projections."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Zusammenfassung", "Executive Summary"),
+        _t(language, "Kennzahlen — formelbasiert.", "Headline metrics — all formula-driven."),
+    )
+    last = _last_projection_row(data)
+    cf_range = f"Projections!E7:E{last}"  # year 1..N cash flows (year 0 is the investment)
+    metrics = [
+        (
+            _t(language, "Gesamtinvestition", "Total Investment"),
+            f"={_aref('investment')}",
+            "#,##0",
+        ),
+        (
+            _t(language, "NPV (3-5 J.)", "NPV"),
+            f"=-{_aref('investment')}+NPV({_aref('discount_rate')},{cf_range})",
+            "#,##0",
+        ),
+        (
+            _t(language, "IRR", "IRR"),
+            f"=IFERROR(IRR(Projections!E6:E{last}),0)",
+            "0.0%",
+        ),
+        (
+            _t(language, "Kumulierter Cashflow (Endjahr)", "Cumulative Cash Flow (final year)"),
+            f"=Projections!F{last}",
+            "#,##0",
+        ),
+    ]
+    for offset, (label, formula, fmt) in enumerate(metrics):
+        row = 5 + offset
+        ws.cell(row=row, column=1, value=label).font = style.bold
+        cell = ws.cell(row=row, column=2, value=formula)
+        cell.fill = style.formula_fill
+        cell.font = style.bold
+        cell.number_format = fmt
+    bl_row = 5 + len(metrics) + 1
+    ws.cell(
+        row=bl_row, column=1, value=_t(language, "Kernaussage", "Bottom Line")
+    ).font = style.bold
+    ws.cell(row=bl_row, column=2, value=data.bottom_line or "—").alignment = _LEFT
+    ws.column_dimensions["A"].width = 30
+    ws.column_dimensions["B"].width = 40
+
+
+def _scenarios_sheet(ws: Worksheet, style: _Style, data: BusinessCaseData) -> None:
+    """Write the Scenarios tab: Base/Optimistic/Pessimistic NPV via yellow multiplier inputs."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Szenarien", "Scenarios"),
+        _t(
+            language,
+            "Gelbe Multiplikatoren anpassen — NPV je Szenario rechnet neu.",
+            "Adjust the yellow multipliers — each scenario's NPV recalculates.",
+        ),
+    )
+    header_row = 5
+    headers = [
+        _t(language, "Szenario", "Scenario"),
+        _t(language, "Umsatz-Faktor", "Revenue factor"),
+        _t(language, "Kosten-Faktor", "Cost factor"),
+        "NPV",
+    ]
+    for col, text in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+    last = _last_projection_row(data)
+    # NPV per scenario: scale year 1..N revenue and opex by the (yellow) factors.
+    # cash flow_yr = rev_yr*revfactor - opex_yr*costfactor; discounted via NPV().
+    scenarios = [
+        (_t(language, "Base", "Base Case"), 1.0, 1.0),
+        (_t(language, "Optimistisch", "Optimistic"), 1.2, 0.9),
+        (_t(language, "Pessimistisch", "Pessimistic"), 0.8, 1.15),
+    ]
+    for offset, (label, rev_factor, cost_factor) in enumerate(scenarios):
+        row = header_row + 1 + offset
+        ws.cell(row=row, column=1, value=label).font = style.bold
+        rev_cell = ws.cell(row=row, column=2, value=rev_factor)
+        cost_cell = ws.cell(row=row, column=3, value=cost_factor)
+        for cell in (rev_cell, cost_cell):
+            cell.fill = style.input_fill
+            cell.number_format = "0%"
+            cell.alignment = _CENTER
+        # SUMPRODUCT of discounted scaled cash flows minus the upfront investment.
+        rev_range = f"Projections!B7:B{last}"
+        opex_range = f"Projections!C7:C{last}"
+        npv_formula = (
+            f"=-{_aref('investment')}+NPV({_aref('discount_rate')},"
+            f"({rev_range}*$B${row})-({opex_range}*$C${row}))"
+        )
+        npv = ws.cell(row=row, column=4, value=npv_formula)
+        npv.fill = style.formula_fill
+        npv.number_format = "#,##0"
+        npv.font = style.bold
+        ws.conditional_formatting.add(
+            f"D{row}", FormulaRule(formula=[f"D{row}>=0"], fill=style.positive_fill)
+        )
+        ws.conditional_formatting.add(
+            f"D{row}", FormulaRule(formula=[f"D{row}<0"], fill=style.negative_fill)
+        )
+    for col_letter, width in (("A", 18), ("B", 14), ("C", 14), ("D", 18)):
+        ws.column_dimensions[col_letter].width = width
+
+
+def _audit_sheet(ws: Worksheet, style: _Style, data: BusinessCaseData) -> None:
+    """Write the Sources & Audit Trail tab: every assumption → its value, source, confidence."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Quellen & Audit-Trail", "Sources & Audit Trail"),
+        _t(language, "Herkunft jeder Annahme.", "Provenance of every assumption."),
+    )
+    headers = [
+        _t(language, "Annahme", "Assumption"),
+        _t(language, "Wert", "Value"),
+        _t(language, "Einheit", "Unit"),
+        _t(language, "Quelle", "Source"),
+        _t(language, "Konfidenz", "Confidence"),
+    ]
+    for col, text in enumerate(headers, start=1):
+        cell = ws.cell(row=_HEADER_ROW, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+    for offset, assumption in enumerate(data.assumptions):
+        row = _HEADER_ROW + 1 + offset
+        ws.cell(row=row, column=1, value=assumption.name)
+        vcell = ws.cell(row=row, column=2, value=assumption.value)
+        vcell.number_format = "0%" if assumption.unit == "%" else "#,##0"
+        ws.cell(row=row, column=3, value=assumption.unit or "—")
+        ws.cell(row=row, column=4, value=assumption.source or "—").alignment = _LEFT
+        conf = ws.cell(row=row, column=5, value=assumption.confidence or "—")
+        if assumption.confidence.lower() == "estimate":
+            conf.font = style.muted
+    for col_letter, width in (("A", 28), ("B", 14), ("C", 10), ("D", 44), ("E", 12)):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = f"A{_HEADER_ROW + 1}"
+
+
+def build_business_case(data: BusinessCaseData, config: AppConfig, output_dir: str | Path) -> Path:
+    """Build the E-3 Business Case financial model and return its path (SPEC §12, N-10).
+
+    Five formula-linked tabs: Executive Summary (NPV/IRR/payback formulas), Assumptions (ALL yellow
+    inputs), Financial Projections (Revenue/OpEx/EBITDA/Cash Flow — every cell references the
+    Assumptions), Scenarios (Base/Optimistic/Pessimistic NPV via yellow multipliers), Sources &
+    Audit Trail. Changing one yellow assumption recalculates the entire model in Excel.
+    """
+    style = _Style(config)
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Summary"
+    _assumptions_sheet(wb.create_sheet("Assumptions"), style, data)
+    _projections_sheet(wb.create_sheet("Projections"), style, data)
+    _scenarios_sheet(wb.create_sheet("Scenarios"), style, data)
+    _audit_sheet(wb.create_sheet("Sources"), style, data)
+    # Summary references Projections/Assumptions, so fill it after the others exist.
+    _summary_sheet(summary, style, data)
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{date.today().isoformat()}_{_slug(data.title)}_business_case.xlsx"
     wb.save(str(path))
     return path
