@@ -19,9 +19,10 @@ machine with no external AI APIs, ever.
 > live status and `strategy_agent_SPEC.md` (incl. §15.5) for the full specification.
 >
 > **PDF note (Windows):** PPTX + Excel are fully local and work out of the box. PDF briefs use
-> WeasyPrint, which needs the **GTK3 runtime** on Windows. Install it once (see
-> [PDF rendering](#pdf-rendering-weasyprint-gtk) below) and PDF renders with zero code changes;
-> until then the agent fails fast with exact instructions and still ships the other deliverables.
+> WeasyPrint, which needs the **GTK/Pango runtime** on Windows — install it once via MSYS2 (see
+> [PDF rendering](#pdf-rendering-weasyprint-gtk) below) and PDF renders with zero code changes. The
+> agent auto-detects the runtime; until it is present it fails fast with exact instructions and
+> still ships the other deliverables.
 
 ---
 

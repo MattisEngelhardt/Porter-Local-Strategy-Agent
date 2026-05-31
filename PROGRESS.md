@@ -703,18 +703,19 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 - **Business case** → **PPTX deck + Excel model in one run** (N-6); Summary NPV =
   `=-Assumptions!$B$4+NPV(Assumptions!$B$9,Projections!E7:E9)`. ✅
 - **Bilingual** → DE/EN labels verified in brief HTML + Excel headers. ✅
-- **PDF** → fails fast with exact GTK instructions (renderer correct; see below). PPTX/Excel live. 
+- **PDF → LIVE ✅ (2026-05-31).** User installed MSYS2 + `mingw-w64-x86_64-pango`; the agent's
+  `_ensure_gtk_dll_dir` auto-detects `C:\msys64\mingw64\bin` (via `os.add_dll_directory`, so it does
+  not pollute PATH) and forces it ahead of the Tesseract `libgobject`. `build_brief_pdf` rendered a
+  real 71 KB T-1 competitor brief to `./output/`. All 177 tests still green with MSYS2 on PATH
+  (pandas/numpy unaffected, verified with `mingw64/bin` first on PATH). **All three output types are
+  now production-live.**
 
 ### Carry-over / Known Issues (Phase 4)
-- **PDF live still needs GTK (user action).** WeasyPrint cannot load GTK in this environment: the
-  Tesseract folder ships an incompatible `libgobject-2.0-0.dll` earlier on PATH and **no real GTK3
-  runtime is installed**. Auto-install was attempted (GitHub direct download, winget MSYS2) but the
-  agent shell's network **intercepts TLS / blocks external downloads** (server-certificate mismatch),
-  and a system GTK install needs admin — so this must be done by the user. **Code is complete:**
-  PDF is unit-tested at the HTML layer, fails fast with exact instructions, and `_ensure_gtk_dll_dir`
-  will pick up a GTK runtime the moment one exists (incl. forcing it ahead of Tesseract's libgobject).
-  **To go live:** install the GTK3 runtime (tschoonj `gtk3-runtime-*-win64.exe`, tick "set up PATH"),
-  reopen the terminal → PDF renders, zero code change. PPTX + Excel never need GTK.
+- **PDF — RESOLVED, now live.** Earlier in the session WeasyPrint couldn't load GTK (the agent shell
+  blocks external downloads; the Tesseract folder ships an incompatible `libgobject`). The user
+  installed **MSYS2 + `mingw-w64-x86_64-pango`**; `_ensure_gtk_dll_dir` auto-detects
+  `C:\msys64\mingw64\bin` and registers it via `os.add_dll_directory` (ahead of Tesseract, without
+  polluting PATH). PDF rendered live (71 KB T-1 brief). No further action needed.
 - **Authored playbooks** (`deep_research_playbook.md`, `doc_prep_playbook.md`) — **user-approved
   as-is** this session (RULE 14); left unchanged.
 - Deck/Excel **shaping** adds one LLM call per deliverable; fail-open fallbacks keep delivery robust
@@ -722,7 +723,7 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 
 ### What to do FIRST next session (Phase 5 starting point)
 1. Run `python -m pytest tests/ -v` — verify **177 pass** (live tests need Ollama + SearXNG up).
-2. **Install the GTK3 runtime** (see README → "PDF rendering") and live-verify a PDF:
+2. PDF is **already live** (MSYS2/Pango installed). Smoke-check after any environment change:
    `python main.py analyze "Competitor brief on Figure AI"` → a `.pdf` in `./output/`.
 3. Phase 5 (SPEC §15): ChromaDB memory (`core/memory.py` write/read via `nomic-embed-text`), delta
    analysis, brain.md seeding from SPEC §3.5 + the propose-additions REPL flow, voice
@@ -730,9 +731,8 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
    (`exporter` / `excel_builder` / `content_shaper`) and the wired pipeline are ready to consume.
 
 ### PHASE 4 STATUS: ✅ COMPLETE
-(All three output types render production-quality deliverables — PDF briefs T-1..T-6, Neura PPTX
-decks (10 slide types, logo), and 4 formula-driven Excel templates (N-10). Rendering wired into both
-the research and doc-prep paths; business case = dual output (N-6). 177 tests green, ruff + mypy
---strict clean. PPTX + Excel live-verified; PDF code-complete + fail-fast pending the user's one-time
-GTK install.)
+(All three output types render production-quality deliverables **live** — PDF briefs T-1..T-6
+(WeasyPrint + MSYS2/Pango), Neura PPTX decks (10 slide types, logo), and 4 formula-driven Excel
+templates (N-10). Rendering wired into both the research and doc-prep paths; business case = dual
+output (N-6). 177 tests green, ruff + mypy --strict clean. PDF + PPTX + Excel all live-verified.)
 ---
