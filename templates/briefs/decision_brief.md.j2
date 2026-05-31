@@ -1,0 +1,10 @@
+{# T-2 Decision Brief (SPEC §10). Recommendation up front (Go / No-Go / Watch). #}
+{% import "_macros.md.j2" as m %}
+<!doctype html><html><head><meta charset="utf-8">{% include "_styles.md.j2" %}</head>
+<body>
+{{ m.head(title, meta, logo_data_uri) }}
+{{ m.bottomline(bl_label, bottom_line) }}
+{{ m.sections(sections) }}
+{{ m.sources(sources_label, sources) }}
+{% if note %}<div class="note">{{ note }}</div>{% endif %}
+</body></html>

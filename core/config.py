@@ -175,6 +175,9 @@ class OutputConfig(BaseModel):
     output_dir: str = "./output"
     include_logo: bool = True
     logo_path: str = "./assets/neura_logo.png"
+    # Optional explicit GTK3-runtime bin dir for WeasyPrint on Windows (None = auto-detect
+    # standard locations). Forced ahead of any incompatible libgobject on PATH (e.g. Tesseract).
+    gtk_runtime_path: str | None = None
     colors: ColorsConfig = Field(default_factory=ColorsConfig)
 
 

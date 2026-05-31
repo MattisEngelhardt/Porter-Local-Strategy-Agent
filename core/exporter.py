@@ -1,27 +1,38 @@
-"""Output rendering (Phase 3.5 slice of SPEC §7 ``exporter.py``): management PDF + PPTX.
+"""Output rendering (SPEC §7 ``exporter.py``): Neura-styled PDF briefs + PPTX decks.
 
-Turns a structured :class:`~models.synthesis.AnalysisOutput` (e.g. the CEO-office document
-briefing) into delivery files with Neura styling (colors from ``config.yaml``, logo bottom-right):
+Turns a structured :class:`~models.synthesis.AnalysisOutput` into delivery files with Neura
+styling (colors from ``config.yaml``, logo bottom-right on decks / in the brief header):
 
-* **PPTX** via ``python-pptx`` — fully local, zero system libraries. Works now.
-* **PDF** via ``weasyprint`` (the SPEC §6 PDF tool). On Windows weasyprint needs the GTK runtime;
-  if it cannot be imported, :func:`build_management_pdf` fails fast with exact install instructions
-  (the renderer itself is correct and works the moment GTK is present — zero code change).
+* **PDF brief** — Jinja2 HTML templates (``templates/briefs/`` T-1..T-6, SPEC §10) → ``weasyprint``
+  (the SPEC §6 PDF tool). :func:`render_brief_html` is pure/testable; :func:`build_brief_pdf` writes
+  the PDF. On Windows WeasyPrint needs the GTK runtime — :func:`_ensure_gtk_dll_dir` forces a found
+  GTK ``bin`` ahead of any incompatible ``libgobject`` on PATH, and if WeasyPrint still cannot be
+  imported the call fails fast with exact install instructions (the renderer is correct and works
+  the moment GTK is present — zero code change).
+* **PPTX deck** — ``python-pptx``, fully local with zero system libraries
+  (:func:`build_management_deck`; generalized to all 10 SPEC §11 slide types in a later task).
 
-Headlines are the analysis's "so what" section headings; the deck is one message per slide. This
-is the focused doc-prep renderer; Phase 4 extends it to all brief/deck/Excel templates.
+The SPEC §4.6 "Markdown → weasyprint" step is resolved to Jinja2→HTML→weasyprint because no
+Markdown→HTML library is permitted by SPEC §6 / RULE 3 (documented in PROGRESS).
 """
 
 from __future__ import annotations
 
+import base64
+import os
 import re
+import sys
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
+
 from core.config import AppConfig
 from models.synthesis import AnalysisOutput
-from models.task import Language
+from models.task import Audience, Language, TaskType
 
 
 class ExportError(Exception):
@@ -66,6 +77,226 @@ def _sentences(text: str, cap: int = 6) -> list[str]:
             if part:
                 bullets.append(part)
     return bullets[:cap] or (["—"] if not text.strip() else [text.strip()[:200]])
+
+
+# ----------------------------------------------------------------- GTK runtime (WeasyPrint)
+def _gtk_candidate_dirs(config: AppConfig) -> list[Path]:
+    """Candidate GTK-runtime ``bin`` dirs (config > env > standard Windows locations)."""
+    candidates: list[str] = []
+    configured = config.output.gtk_runtime_path
+    if configured:
+        candidates.append(configured)
+    env_dir = os.environ.get("WEASYPRINT_DLL_DIRECTORIES")
+    if env_dir:
+        candidates.extend(env_dir.split(os.pathsep))
+    local = os.environ.get("LOCALAPPDATA", "")
+    candidates += [
+        r"C:\Program Files\GTK3-Runtime Win64\bin",
+        os.path.join(local, "Programs", "GTK3-Runtime Win64", "bin") if local else "",
+        r"C:\msys64\mingw64\bin",
+    ]
+    return [Path(c) for c in candidates if c]
+
+
+def _ensure_gtk_dll_dir(config: AppConfig) -> None:
+    """Put a real GTK runtime's ``bin`` first on the Windows DLL search path (idempotent).
+
+    WeasyPrint needs Pango/Cairo/GObject. On Windows the Tesseract folder may ship an
+    incompatible ``libgobject`` earlier on PATH, so a found GTK runtime is forced ahead of it
+    (both via ``PATH`` and :func:`os.add_dll_directory`). No-op off Windows / when none is found.
+    """
+    if sys.platform != "win32":
+        return
+    for path in _gtk_candidate_dirs(config):
+        if path.is_dir() and (path / "libgobject-2.0-0.dll").is_file():
+            bin_str = str(path)
+            current = os.environ.get("PATH", "")
+            if not current.lower().startswith(bin_str.lower()):
+                os.environ["PATH"] = bin_str + os.pathsep + current
+            add_dll = getattr(os, "add_dll_directory", None)
+            if callable(add_dll):
+                try:
+                    add_dll(bin_str)
+                except OSError:  # pragma: no cover - defensive
+                    pass
+            return
+
+
+# ----------------------------------------------------------------- brief (Jinja2 → HTML → PDF)
+# Per-template labels (bottom-line label · type label), bilingual as (DE, EN).
+_BRIEF_META: dict[str, dict[str, tuple[str, str]]] = {
+    "competitor_brief.md.j2": {
+        "bl": ("Kernaussage", "Executive Summary"),
+        "type": ("Wettbewerbsanalyse", "Competitive Intelligence"),
+    },
+    "decision_brief.md.j2": {
+        "bl": ("Empfehlung", "Recommendation"),
+        "type": ("Entscheidungsanalyse", "Decision Analysis"),
+    },
+    "market_overview.md.j2": {
+        "bl": ("Kernaussage", "Bottom Line"),
+        "type": ("Marktanalyse", "Market Intelligence"),
+    },
+    "board_update.md.j2": {
+        "bl": ("Kernaussage", "Bottom Line"),
+        "type": ("Management-Briefing", "Management Brief"),
+    },
+    "document_synthesis.md.j2": {
+        "bl": ("Kernaussage", "Bottom Line"),
+        "type": ("Dokumentenanalyse", "Document Analysis"),
+    },
+    "adhoc_brief.md.j2": {
+        "bl": ("Kernaussage", "Bottom Line Up Front"),
+        "type": ("Kurzanalyse", "Quick Intel"),
+    },
+}
+
+_DEFAULT_BRIEF_TEMPLATE = "adhoc_brief.md.j2"
+
+# Task type → brief template (SPEC §10 T-1..T-6).
+_BRIEF_TEMPLATES: dict[TaskType, str] = {
+    TaskType.COMPETITOR_ANALYSIS: "competitor_brief.md.j2",
+    TaskType.TARGET_SCREENING: "decision_brief.md.j2",
+    TaskType.PARTNERSHIP_EVALUATION: "decision_brief.md.j2",
+    TaskType.OPTION_COMPARISON: "decision_brief.md.j2",
+    TaskType.STRATEGIC_INITIATIVE: "decision_brief.md.j2",
+    TaskType.BUSINESS_CASE: "decision_brief.md.j2",
+    TaskType.MARKET_RESEARCH: "market_overview.md.j2",
+    TaskType.MARKET_ANALYSIS: "market_overview.md.j2",
+    TaskType.FINANCIAL_BENCHMARK: "market_overview.md.j2",
+    TaskType.BOARD_PREP: "board_update.md.j2",
+    TaskType.MEETING_BRIEFING: "board_update.md.j2",
+    TaskType.DOCUMENT_SYNTHESIS: "document_synthesis.md.j2",
+    TaskType.INDUSTRY_NEWS: "adhoc_brief.md.j2",
+    TaskType.ADHOC: "adhoc_brief.md.j2",
+}
+
+_TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates" / "briefs"
+_BULLET_RE = re.compile(r"^\s*[-*•]\s+")
+
+
+def brief_template_for(task_type: TaskType) -> str:
+    """Return the brief template filename for a task type (SPEC §10)."""
+    return _BRIEF_TEMPLATES.get(task_type, _DEFAULT_BRIEF_TEMPLATE)
+
+
+@lru_cache(maxsize=1)
+def _brief_env() -> Environment:
+    """Build (and cache) the Jinja2 environment for the brief templates."""
+    return Environment(
+        loader=FileSystemLoader(str(_TEMPLATES_DIR)),
+        autoescape=select_autoescape(default=True, default_for_string=True),
+        trim_blocks=True,
+        lstrip_blocks=True,
+    )
+
+
+def _body_to_html(text: str) -> Markup:
+    """Convert a section body (plain text + optional bullet lines) into safe HTML.
+
+    Blank lines separate blocks; lines starting with ``-``/``*``/``•`` become a bullet list,
+    other lines a paragraph (single newlines → ``<br>``). Everything is HTML-escaped first.
+    """
+    blocks = re.split(r"\n\s*\n", text.strip())
+    parts: list[str] = []
+    for block in blocks:
+        lines = [ln for ln in block.splitlines() if ln.strip()]
+        if not lines:
+            continue
+        if all(_BULLET_RE.match(ln) for ln in lines):
+            items = "".join(f"<li>{escape(_BULLET_RE.sub('', ln).strip())}</li>" for ln in lines)
+            parts.append(f"<ul>{items}</ul>")
+        else:
+            joined = Markup("<br>").join(escape(ln.strip()) for ln in lines)
+            parts.append(f"<p>{joined}</p>")
+    return Markup("".join(parts) or "<p>—</p>")
+
+
+def _logo_data_uri(config: AppConfig) -> str | None:
+    """Return the Neura logo as a base64 PNG data URI for HTML embedding (or ``None``)."""
+    logo = Path(config.output.logo_path)
+    if not (config.output.include_logo and logo.is_file()):
+        return None
+    data = base64.b64encode(logo.read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{data}"
+
+
+def _brief_context(
+    analysis: AnalysisOutput, config: AppConfig, template_name: str
+) -> dict[str, Any]:
+    """Assemble the Jinja context for a brief from the analysis (bilingual labels)."""
+    is_de = analysis.language == Language.DE
+    idx = 0 if is_de else 1
+    meta = _BRIEF_META.get(template_name, _BRIEF_META[_DEFAULT_BRIEF_TEMPLATE])
+    meta_line = (
+        f"{date.today().isoformat()} · {meta['type'][idx]} · {analysis.language.value.upper()}"
+    )
+    sections = [
+        {"heading": s.heading, "body_html": _body_to_html(s.body)} for s in analysis.sections
+    ]
+    sources = [
+        {
+            "url": s.url,
+            "title": s.title or "",
+            "date": s.date or "",
+            "tier": s.tier.value if s.tier else "",
+        }
+        for s in analysis.sources
+    ]
+    return {
+        "c": config.output.colors,
+        "title": analysis.title,
+        "meta": meta_line,
+        "bl_label": meta["bl"][idx],
+        "bottom_line": analysis.bottom_line,
+        "sections": sections,
+        "sources_label": "Quellen" if is_de else "Sources",
+        "sources": sources,
+        "note": "",
+        "footer_note": "NEURA · " + ("Management-Briefing" if is_de else "Management Brief"),
+        "logo_data_uri": _logo_data_uri(config),
+    }
+
+
+def render_brief_html(
+    analysis: AnalysisOutput,
+    config: AppConfig,
+    *,
+    task_type: TaskType = TaskType.DOCUMENT_SYNTHESIS,
+    audience: Audience | None = None,
+) -> str:
+    """Render the analysis into a Neura-styled HTML brief (pure — no WeasyPrint, testable)."""
+    template_name = brief_template_for(task_type)
+    template = _brief_env().get_template(template_name)
+    return template.render(**_brief_context(analysis, config, template_name))
+
+
+def build_brief_pdf(
+    analysis: AnalysisOutput,
+    config: AppConfig,
+    output_dir: str | Path,
+    *,
+    task_type: TaskType = TaskType.DOCUMENT_SYNTHESIS,
+    audience: Audience | None = None,
+) -> Path:
+    """Render the analysis into a Neura-styled PDF brief (Jinja2 → HTML → WeasyPrint).
+
+    The brief template is chosen from the task type (SPEC §10). Raises :class:`PdfBuildError`
+    with exact install instructions if WeasyPrint / its GTK runtime is unavailable (the renderer
+    is correct and works the moment GTK is present — no code change).
+    """
+    _ensure_gtk_dll_dir(config)
+    try:
+        from weasyprint import HTML
+    except (ImportError, OSError) as exc:
+        raise PdfBuildError(_PDF_FIX) from exc
+
+    html = render_brief_html(analysis, config, task_type=task_type, audience=audience)
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{date.today().isoformat()}_{_slug(analysis.title)}_brief.pdf"
+    HTML(string=html).write_pdf(str(path))
+    return path
 
 
 # ----------------------------------------------------------------- PPTX (python-pptx)
@@ -198,61 +429,13 @@ def build_management_deck(
     return path
 
 
-# ----------------------------------------------------------------- PDF (weasyprint)
-def _briefing_html(analysis: AnalysisOutput, language: Language, config: AppConfig) -> str:
-    """Build clean, Neura-styled HTML for the management PDF brief."""
-    c = config.output.colors
-    is_de = language == Language.DE
-
-    def esc(text: str) -> str:
-        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    sections = "".join(f"<h2>{esc(s.heading)}</h2><p>{esc(s.body)}</p>" for s in analysis.sections)
-    sources = "".join(
-        f"<li>{esc(s.url)}{(' — ' + esc(s.title)) if s.title else ''}</li>"
-        for s in analysis.sources
-    )
-    sources_block = (
-        f"<h2>{'Quellen' if is_de else 'Sources'}</h2><ul>{sources}</ul>" if sources else ""
-    )
-    label = "Management-Briefing" if is_de else "Management Briefing"
-    bl_label = "Kernaussage" if is_de else "Bottom Line"
-    meta = f"{label} · {date.today().isoformat()} · {analysis.language.value}"
-    return f"""<!doctype html><html><head><meta charset="utf-8"><style>
-      @page {{ size: A4; margin: 1.8cm; }}
-      body {{ font-family: Arial, sans-serif; color: {c.text_dark};
-              font-size: 11pt; line-height: 1.45; }}
-      h1 {{ font-size: 20pt; color: {c.text_dark}; margin: 0 0 2pt 0; }}
-      .meta {{ color: {c.charcoal}; font-size: 9pt; margin-bottom: 14pt; }}
-      .bl {{ background: {c.light_surface}; border-left: 4px solid {c.accent_cyan};
-             padding: 10pt 12pt; margin-bottom: 14pt; font-size: 12pt; }}
-      h2 {{ font-size: 13pt; color: {c.accent_cyan}; margin: 14pt 0 4pt 0; }}
-      p {{ margin: 0 0 8pt 0; }} ul {{ margin: 0; padding-left: 16pt; }}
-      li {{ margin-bottom: 3pt; }}
-    </style></head><body>
-      <h1>{esc(analysis.title)}</h1>
-      <div class="meta">{meta}</div>
-      <div class="bl"><b>{bl_label}:</b> {esc(analysis.bottom_line)}</div>
-      {sections}{sources_block}
-    </body></html>"""
-
-
+# ----------------------------------------------------------------- PDF (back-compat shim)
 def build_management_pdf(
     analysis: AnalysisOutput, config: AppConfig, output_dir: str | Path, language: Language
 ) -> Path:
-    """Render the analysis into a Neura-styled PDF brief and return its path.
+    """Back-compatible management PDF brief — delegates to :func:`build_brief_pdf` (T-5 layout).
 
-    Raises :class:`PdfBuildError` with exact install instructions if WeasyPrint / its GTK runtime
-    is unavailable (the renderer is correct and works once GTK is installed — no code change).
+    Kept so the doc-prep path and existing tests keep working; new callers should use
+    :func:`build_brief_pdf` directly with the task type.
     """
-    try:
-        from weasyprint import HTML
-    except (ImportError, OSError) as exc:
-        raise PdfBuildError(_PDF_FIX) from exc
-
-    html = _briefing_html(analysis, language, config)
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    path = out / f"{date.today().isoformat()}_{_slug(analysis.title)}_brief.pdf"
-    HTML(string=html).write_pdf(str(path))
-    return path
+    return build_brief_pdf(analysis, config, output_dir, task_type=TaskType.DOCUMENT_SYNTHESIS)

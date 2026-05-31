@@ -72,6 +72,8 @@ output:
   output_dir: "./output"
   include_logo: true
   logo_path: "./assets/neura_logo.png"
+  # gtk_runtime_path: "C:/Program Files/GTK3-Runtime Win64/bin"  # optional: WeasyPrint GTK bin
+  #   (leave unset to auto-detect standard locations; forced ahead of any libgobject on PATH)
   colors:
     black: "#000000"
     white: "#FFFFFF"

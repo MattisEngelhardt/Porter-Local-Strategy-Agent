@@ -1,0 +1,10 @@
+{# T-3 Market Overview Brief (SPEC §10). Market at a glance + trends + Neura's position. #}
+{% import "_macros.md.j2" as m %}
+<!doctype html><html><head><meta charset="utf-8">{% include "_styles.md.j2" %}</head>
+<body>
+{{ m.head(title, meta, logo_data_uri) }}
+{{ m.bottomline(bl_label, bottom_line) }}
+{{ m.sections(sections) }}
+{{ m.sources(sources_label, sources) }}
+{% if note %}<div class="note">{{ note }}</div>{% endif %}
+</body></html>

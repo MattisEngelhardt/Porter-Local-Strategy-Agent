@@ -1,0 +1,40 @@
+{#
+  Shared brief building blocks (Phase 4). The agent's analysis is format-agnostic
+  (title / bottom_line / sections / sources); these macros lay it out professionally.
+  ``body_html`` and ``logo_data_uri`` are pre-built + trusted in Python, so they are marked
+  ``| safe``; all other values are auto-escaped by the Jinja environment.
+#}
+{% macro head(title, meta, logo_data_uri) -%}
+<div class="head">
+  <div class="titles">
+    <h1>{{ title }}</h1>
+    <div class="meta">{{ meta }}</div>
+  </div>
+  {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri | safe }}" alt="NEURA">{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro bottomline(label, text) -%}
+<div class="bl">
+  <div class="label">{{ label }}</div>
+  <div class="text">{{ text }}</div>
+</div>
+{%- endmacro %}
+
+{% macro sections(items) -%}
+{% for s in items %}
+<h2>{{ s.heading }}</h2>
+{{ s.body_html | safe }}
+{% endfor %}
+{%- endmacro %}
+
+{% macro sources(label, items) -%}
+{% if items %}
+<h2>{{ label }}</h2>
+<ul class="sources">
+{% for src in items %}
+  <li>{{ src.url }}{% if src.title %} — {{ src.title }}{% endif %}{% if src.date %} ({{ src.date }}){% endif %}{% if src.tier %} <span class="tier">[{{ src.tier }}]</span>{% endif %}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{%- endmacro %}
