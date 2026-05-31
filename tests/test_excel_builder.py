@@ -12,9 +12,23 @@ import pytest
 from openpyxl import load_workbook
 
 from core.config import AppConfig
-from core.excel_builder import ExcelBuildError, build_decision_matrix
+from core.excel_builder import (
+    ExcelBuildError,
+    build_benchmark_table,
+    build_decision_matrix,
+    build_tracker,
+)
 from models.task import Language
-from models.workbook import DecisionMatrixData, EntityScores, ScoringCriterion
+from models.workbook import (
+    BenchmarkData,
+    BenchmarkRow,
+    BenchmarkSource,
+    DecisionMatrixData,
+    EntityScores,
+    ScoringCriterion,
+    TrackerData,
+    TrackerItem,
+)
 
 
 def _data(language: Language = Language.EN) -> DecisionMatrixData:
@@ -95,3 +109,83 @@ def test_decision_matrix_requires_criteria(tmp_path: Path) -> None:
     empty = DecisionMatrixData(title="x", language=Language.EN, criteria=[], entities=[])
     with pytest.raises(ExcelBuildError):
         build_decision_matrix(empty, AppConfig(), tmp_path)
+
+
+# ----------------------------------------------------------------- E-2 Benchmark Table
+def _benchmark() -> BenchmarkData:
+    return BenchmarkData(
+        title="Humanoid Funding Benchmark",
+        language=Language.EN,
+        metrics=["Founded", "HQ", "Total Funding", "Lead Investor"],
+        rows=[
+            BenchmarkRow(name="Figure", values=["2022", "Sunnyvale", "$854M", "Microsoft"]),
+            BenchmarkRow(name="1X", values=["2014", "Norway", "$125M", "EQT"]),
+        ],
+        sources=[
+            BenchmarkSource(
+                entity="Figure",
+                metric="Total Funding",
+                value="$854M",
+                url="https://techcrunch.com",
+                date="2024",
+                confidence="High",
+            )
+        ],
+    )
+
+
+def test_benchmark_table_has_excel_table_and_sources(tmp_path: Path) -> None:
+    """E-2 wraps the data in an Excel Table (auto-filter) and adds a Sources tab (SPEC §12)."""
+    path = build_benchmark_table(_benchmark(), AppConfig(), tmp_path)
+    wb = load_workbook(str(path))
+    assert wb.sheetnames == ["Benchmark_Table", "Sources"]
+    ws = wb["Benchmark_Table"]
+    assert "BenchmarkTable" in ws.tables  # an Excel Table → sortable/filterable
+    assert ws["A5"].value == "Company" and ws["E5"].value == "Lead Investor"
+    assert ws["A6"].value == "Figure"
+    assert wb["Sources"]["D6"].value == "https://techcrunch.com"
+
+
+def test_benchmark_requires_metrics(tmp_path: Path) -> None:
+    """A benchmark with no metric columns fails fast."""
+    empty = BenchmarkData(title="x", language=Language.EN, metrics=[], rows=[])
+    with pytest.raises(ExcelBuildError):
+        build_benchmark_table(empty, AppConfig(), tmp_path)
+
+
+# ----------------------------------------------------------------- E-4 Tracker Dashboard
+def _tracker() -> TrackerData:
+    return TrackerData(
+        title="M&A Pipeline",
+        language=Language.EN,
+        items=[
+            TrackerItem(name="Dexory", category="Warehouse", status="Active", priority="High"),
+            TrackerItem(name="Exotec", category="Logistics", status="On Hold", priority="Medium"),
+        ],
+    )
+
+
+def test_tracker_three_tabs_dropdowns_and_dashboard_formula(tmp_path: Path) -> None:
+    """E-4 has Dashboard/Tracker/Archive; dropdowns + a COUNTIF dashboard formula (SPEC §12)."""
+    path = build_tracker(_tracker(), AppConfig(), tmp_path)
+    wb = load_workbook(str(path))
+    assert wb.sheetnames == ["Dashboard", "Tracker", "Archive"]
+    tracker = wb["Tracker"]
+    # Status + Priority data-validation dropdowns.
+    assert len(tracker.data_validations.dataValidation) == 2
+    formulas = {dv.formula1 for dv in tracker.data_validations.dataValidation}
+    assert any("Active" in f for f in formulas) and any("High" in f for f in formulas)
+    # Conditional formatting present (status colours + priority).
+    assert len(tracker.conditional_formatting._cf_rules) >= 2
+    # Dashboard stat is a real formula linked to the Tracker tab (not a hardcoded count).
+    dashboard = wb["Dashboard"]
+    active = dashboard["B4"].value
+    assert isinstance(active, str) and active.startswith("=COUNTIF(Tracker!")
+
+
+def test_tracker_prepopulates_items(tmp_path: Path) -> None:
+    """Provided items are written into the Tracker tab (pre-populated from research)."""
+    path = build_tracker(_tracker(), AppConfig(), tmp_path)
+    tracker = load_workbook(str(path))["Tracker"]
+    assert tracker["A4"].value == "Dexory"
+    assert tracker["C4"].value == "Active"

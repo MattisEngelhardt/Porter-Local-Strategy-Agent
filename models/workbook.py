@@ -69,3 +69,53 @@ class DecisionMatrixData(BaseModel):
     language: Language
     criteria: list[ScoringCriterion] = Field(default_factory=list)
     entities: list[EntityScores] = Field(default_factory=list)
+
+
+class BenchmarkRow(BaseModel):
+    """One entity row of a benchmark table (E-2): the entity name + a value per metric column."""
+
+    name: str
+    values: list[str] = Field(default_factory=list)  # one value per metric (in column order)
+
+
+class BenchmarkSource(BaseModel):
+    """One provenance row of the benchmark Sources tab (E-2)."""
+
+    entity: str = ""
+    metric: str = ""
+    value: str = ""
+    url: str = ""
+    date: str = ""
+    confidence: str = ""  # High | Medium | Estimate
+
+
+class BenchmarkData(BaseModel):
+    """Structured input for the E-2 Intelligence/Benchmark Table (facts, no scoring)."""
+
+    title: str
+    language: Language
+    metrics: list[str] = Field(default_factory=list)  # column headers (after the entity column)
+    rows: list[BenchmarkRow] = Field(default_factory=list)
+    sources: list[BenchmarkSource] = Field(default_factory=list)
+
+
+class TrackerItem(BaseModel):
+    """One row of the E-4 Tracker (pipeline/initiative/project item)."""
+
+    name: str
+    category: str = ""
+    status: str = "Active"  # Active | On Hold | Completed | Dropped
+    priority: str = "Medium"  # High | Medium | Low
+    owner: str = ""
+    next_step: str = ""
+    next_step_date: str = ""
+    last_update: str = ""
+    notes: str = ""
+
+
+class TrackerData(BaseModel):
+    """Structured input for the E-4 Tracker / Status Dashboard."""
+
+    title: str
+    language: Language
+    items: list[TrackerItem] = Field(default_factory=list)

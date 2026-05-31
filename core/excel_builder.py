@@ -6,8 +6,8 @@ input cell recalculates everything downstream when the file is opened in Microso
 coding (yellow=input, blue=formula, green=positive, red=risk, dark=header) comes from
 ``config.output.colors`` (RULE 4). Fully local — openpyxl writes .xlsx with zero network (N-4).
 
-Templates (SPEC §12): E-1 Decision/Scoring Matrix (this task), E-2 Benchmark, E-3 Business Case
-model, E-4 Tracker. Structured content is shaped by :mod:`core.content_shaper`.
+Templates (SPEC §12): E-1 Decision/Scoring Matrix, E-2 Intelligence/Benchmark Table, E-3 Business
+Case model, E-4 Tracker/Status Dashboard. Structured content is shaped by ``core.content_shaper``.
 """
 
 from __future__ import annotations
@@ -19,11 +19,17 @@ from openpyxl import Workbook
 from openpyxl.formatting.rule import ColorScaleRule, FormulaRule
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
 from core.config import AppConfig
 from models.task import Language
-from models.workbook import DecisionMatrixData
+from models.workbook import (
+    BenchmarkData,
+    DecisionMatrixData,
+    TrackerData,
+)
 
 
 class ExcelBuildError(Exception):
@@ -316,5 +322,249 @@ def build_decision_matrix(
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{date.today().isoformat()}_{_slug(data.title)}_matrix.xlsx"
+    wb.save(str(path))
+    return path
+
+
+# --------------------------------------------------------------- E-2 Intelligence / Benchmark
+def _benchmark_table(ws: Worksheet, style: _Style, data: BenchmarkData) -> None:
+    """Write the Benchmark_Table tab: an Excel Table (auto-filter, sortable) of entity × metric."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        data.title,
+        _t(
+            language,
+            "Faktenvergleich (keine Bewertung). Spalten per Filter sortierbar.",
+            "Factual comparison (no scoring). Sort any column via the filter.",
+        ),
+    )
+    header_row = _HEADER_ROW
+    headers = [_t(language, "Unternehmen", "Company"), *data.metrics]
+    n_cols = len(headers)
+    for col, text in enumerate(headers, start=1):
+        cell = ws.cell(row=header_row, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+    for offset, row_data in enumerate(data.rows):
+        row = header_row + 1 + offset
+        name_cell = ws.cell(row=row, column=1, value=row_data.name)
+        name_cell.font = style.bold
+        if offset % 2:
+            name_cell.fill = style.surface_fill
+        for idx in range(len(data.metrics)):
+            value = row_data.values[idx] if idx < len(row_data.values) else ""
+            cell = ws.cell(row=row, column=2 + idx, value=value or "—")
+            cell.alignment = _LEFT
+            if offset % 2:
+                cell.fill = style.surface_fill
+
+    last_row = header_row + len(data.rows)
+    ref = f"A{header_row}:{get_column_letter(n_cols)}{max(last_row, header_row + 1)}"
+    table = Table(displayName="BenchmarkTable", ref=ref)
+    table.tableStyleInfo = TableStyleInfo(
+        name="TableStyleLight9", showRowStripes=True, showColumnStripes=False
+    )
+    ws.add_table(table)
+    ws.column_dimensions["A"].width = 26
+    for idx in range(len(data.metrics)):
+        ws.column_dimensions[get_column_letter(2 + idx)].width = 18
+    ws.freeze_panes = f"B{header_row + 1}"
+
+
+def _benchmark_sources(ws: Worksheet, style: _Style, data: BenchmarkData) -> None:
+    """Write the Sources tab: per entity × metric provenance (url, date, confidence)."""
+    language = data.language
+    _title_block(
+        ws,
+        style,
+        _t(language, "Quellen", "Sources"),
+        _t(language, "Herkunft jeder Kennzahl.", "Provenance of each value."),
+    )
+    headers = [
+        _t(language, "Unternehmen", "Company"),
+        _t(language, "Kennzahl", "Metric"),
+        _t(language, "Wert", "Value"),
+        _t(language, "Quelle (URL)", "Source URL"),
+        _t(language, "Datum", "Date"),
+        _t(language, "Konfidenz", "Confidence"),
+    ]
+    for col, text in enumerate(headers, start=1):
+        cell = ws.cell(row=_HEADER_ROW, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+    for offset, src in enumerate(data.sources):
+        row = _HEADER_ROW + 1 + offset
+        for col, value in enumerate(
+            (src.entity, src.metric, src.value, src.url, src.date, src.confidence), start=1
+        ):
+            cell = ws.cell(row=row, column=col, value=value or "—")
+            cell.alignment = _LEFT
+            if src.confidence.lower() == "estimate" and col == 6:
+                cell.font = style.muted
+    for col_letter, width in (("A", 22), ("B", 20), ("C", 16), ("D", 40), ("E", 12), ("F", 12)):
+        ws.column_dimensions[col_letter].width = width
+    ws.freeze_panes = f"A{_HEADER_ROW + 1}"
+
+
+def build_benchmark_table(data: BenchmarkData, config: AppConfig, output_dir: str | Path) -> Path:
+    """Build the E-2 Intelligence/Benchmark Table workbook and return its path (SPEC §12).
+
+    An Excel Table with auto-filter over the entity × metric grid (sortable by any column), plus a
+    Sources tab with per-value provenance + confidence. Facts only — no scoring (that is E-1).
+    """
+    if not data.metrics:
+        raise ExcelBuildError("Benchmark table needs at least one metric column.")
+    style = _Style(config)
+    wb = Workbook()
+    table = wb.active
+    table.title = "Benchmark_Table"
+    _benchmark_table(table, style, data)
+    _benchmark_sources(wb.create_sheet("Sources"), style, data)
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{date.today().isoformat()}_{_slug(data.title)}_benchmark.xlsx"
+    wb.save(str(path))
+    return path
+
+
+# --------------------------------------------------------------- E-4 Tracker / Status Dashboard
+_STATUS_OPTIONS = ("Active", "On Hold", "Completed", "Dropped")
+_PRIORITY_OPTIONS = ("High", "Medium", "Low")
+_TRACKER_HEADER_ROW = 3
+_TRACKER_FIRST_DATA_ROW = 4
+_TRACKER_MAX_ROW = 200  # data-validation + conditional formatting extend over the working range
+
+
+def _tracker_sheet(ws: Worksheet, style: _Style, data: TrackerData) -> None:
+    """Write the Tracker tab: items + Status/Priority dropdowns + conditional formatting."""
+    language = data.language
+    ws["A1"] = _t(language, "Tracker", "Tracker")
+    ws["A1"].font = style.title_font
+    headers = [
+        _t(language, "Eintrag / Thema", "Entity / Item"),
+        _t(language, "Kategorie", "Category"),
+        _t(language, "Status", "Status"),
+        _t(language, "Priorität", "Priority"),
+        _t(language, "Verantwortlich", "Owner"),
+        _t(language, "Nächster Schritt", "Next Step"),
+        _t(language, "Fällig am", "Next Step Date"),
+        _t(language, "Letztes Update", "Last Update"),
+        _t(language, "Notizen", "Notes"),
+    ]
+    for col, text in enumerate(headers, start=1):
+        cell = ws.cell(row=_TRACKER_HEADER_ROW, column=col, value=text)
+        cell.fill = style.header_fill
+        cell.font = style.header_font
+        cell.alignment = _CENTER
+    for offset, item in enumerate(data.items):
+        row = _TRACKER_FIRST_DATA_ROW + offset
+        values = (
+            item.name,
+            item.category,
+            item.status,
+            item.priority,
+            item.owner,
+            item.next_step,
+            item.next_step_date,
+            item.last_update,
+            item.notes,
+        )
+        for col, value in enumerate(values, start=1):
+            ws.cell(row=row, column=col, value=value or "").alignment = _LEFT
+
+    # Data-validation dropdowns (Status col C, Priority col D) over the whole working range.
+    status_dv = DataValidation(
+        type="list", formula1='"' + ",".join(_STATUS_OPTIONS) + '"', allow_blank=True
+    )
+    priority_dv = DataValidation(
+        type="list", formula1='"' + ",".join(_PRIORITY_OPTIONS) + '"', allow_blank=True
+    )
+    ws.add_data_validation(status_dv)
+    ws.add_data_validation(priority_dv)
+    status_dv.add(f"C{_TRACKER_FIRST_DATA_ROW}:C{_TRACKER_MAX_ROW}")
+    priority_dv.add(f"D{_TRACKER_FIRST_DATA_ROW}:D{_TRACKER_MAX_ROW}")
+
+    # Conditional formatting: Status colours (Active/On Hold/Dropped) + Priority High = red.
+    status_range = f"C{_TRACKER_FIRST_DATA_ROW}:C{_TRACKER_MAX_ROW}"
+    ws.conditional_formatting.add(
+        status_range, FormulaRule(formula=['$C4="Active"'], fill=style.positive_fill)
+    )
+    ws.conditional_formatting.add(
+        status_range, FormulaRule(formula=['$C4="On Hold"'], fill=style.input_fill)
+    )
+    ws.conditional_formatting.add(
+        status_range, FormulaRule(formula=['$C4="Dropped"'], fill=style.surface_fill)
+    )
+    ws.conditional_formatting.add(
+        f"D{_TRACKER_FIRST_DATA_ROW}:D{_TRACKER_MAX_ROW}",
+        FormulaRule(formula=['$D4="High"'], fill=style.negative_fill),
+    )
+    widths = (26, 16, 12, 10, 16, 30, 13, 14, 34)
+    for idx, width in enumerate(widths):
+        ws.column_dimensions[get_column_letter(1 + idx)].width = width
+    ws.freeze_panes = f"B{_TRACKER_FIRST_DATA_ROW}"
+
+
+def _dashboard_sheet(ws: Worksheet, style: _Style, language: Language) -> None:
+    """Write the Dashboard tab: COUNTIF stats formula-linked to the Tracker tab."""
+    ws["A1"] = _t(language, "Dashboard", "Dashboard")
+    ws["A1"].font = style.title_font
+    rng = f"Tracker!$C${_TRACKER_FIRST_DATA_ROW}:$C${_TRACKER_MAX_ROW}"
+    name_rng = f"Tracker!$A${_TRACKER_FIRST_DATA_ROW}:$A${_TRACKER_MAX_ROW}"
+    prio_rng = f"Tracker!$D${_TRACKER_FIRST_DATA_ROW}:$D${_TRACKER_MAX_ROW}"
+    stats = [
+        (_t(language, "Einträge gesamt", "Total items"), f"=COUNTA({name_rng})"),
+        (_t(language, "Aktiv", "Active"), f'=COUNTIF({rng},"Active")'),
+        (_t(language, "On Hold", "On Hold"), f'=COUNTIF({rng},"On Hold")'),
+        (_t(language, "Abgeschlossen", "Completed"), f'=COUNTIF({rng},"Completed")'),
+        (_t(language, "Hohe Priorität", "High priority"), f'=COUNTIF({prio_rng},"High")'),
+    ]
+    for offset, (label, formula) in enumerate(stats):
+        row = _TRACKER_HEADER_ROW + offset
+        ws.cell(row=row, column=1, value=label).font = style.bold
+        cell = ws.cell(row=row, column=2, value=formula)
+        cell.fill = style.formula_fill
+        cell.font = style.bold
+        cell.alignment = _CENTER
+    updated_row = _TRACKER_HEADER_ROW + len(stats) + 1
+    ws.cell(
+        row=updated_row, column=1, value=_t(language, "Stand", "Last updated")
+    ).font = style.bold
+    upd = ws.cell(row=updated_row, column=2)
+    upd.fill = style.input_fill  # yellow: user fills the date
+    ws.column_dimensions["A"].width = 22
+    ws.column_dimensions["B"].width = 16
+
+
+def _archive_sheet(ws: Worksheet, style: _Style, data: TrackerData) -> None:
+    """Write the Archive tab: same headers as Tracker, for completed/dropped items (user-kept)."""
+    _tracker_sheet(ws, style, TrackerData(title=data.title, language=data.language, items=[]))
+    ws["A1"] = _t(data.language, "Archiv", "Archive")
+    ws["A1"].font = style.title_font
+
+
+def build_tracker(data: TrackerData, config: AppConfig, output_dir: str | Path) -> Path:
+    """Build the E-4 Tracker / Status Dashboard workbook and return its path (SPEC §12).
+
+    Three tabs: Dashboard (COUNTIF stats formula-linked to Tracker), Tracker (Status/Priority
+    data-validation dropdowns + conditional formatting), Archive (same shape, user-managed). The
+    dropdowns + colour-coding make this the one living document the user maintains.
+    """
+    style = _Style(config)
+    wb = Workbook()
+    dashboard = wb.active
+    dashboard.title = "Dashboard"
+    _dashboard_sheet(dashboard, style, data.language)
+    _tracker_sheet(wb.create_sheet("Tracker"), style, data)
+    _archive_sheet(wb.create_sheet("Archive"), style, data)
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / f"{date.today().isoformat()}_{_slug(data.title)}_tracker.xlsx"
     wb.save(str(path))
     return path

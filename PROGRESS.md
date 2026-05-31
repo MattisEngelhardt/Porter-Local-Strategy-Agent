@@ -608,7 +608,9 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 [x] 5. `core/excel_builder.py` E-1 Decision Matrix (weights yellow, SUMPRODUCT/RANK, cond-fmt,
        Criteria_Guide + Research_Notes tabs) (done 2026-05-31 — 160 green; N-10 verified: data_only
        re-open returns None → pure formulas)
-[ ] 6. excel_builder E-2 Benchmark (table+auto-filter+Sources) + E-4 Tracker (data-validation)
+[x] 6. excel_builder E-2 Benchmark (Excel Table+auto-filter+Sources) + E-4 Tracker (Dashboard
+       COUNTIF formulas, Status/Priority data-validation dropdowns, cond-fmt, Archive)
+       (done 2026-05-31 — 163 green)
 [ ] 7. excel_builder E-3 Business Case 5-tab model (NPV/IRR/payback, formula integrity N-10)
 [ ] 8. `content_shaper.shape_workbook` (per-template structured data via LLM + fail-open fallback)
 [ ] 9. Pipeline wiring: generalize `_render_outputs` (3 formats + shaping); render in research path
