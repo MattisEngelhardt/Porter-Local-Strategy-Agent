@@ -563,6 +563,26 @@ The doc-prep skill now **produces the deliverables**, not just the blueprint:
   hallucination), blueprint `.md` written. Tests: +13 total (routing incl. ambiguity, questions,
   guidance, briefing, markdown, write, pipeline branch, deck build, PDF fail-fast).
 
+### What to do FIRST next session (Phase 4 starting point)
+1. Run `python -m pytest tests/ -v` — verify 141 pass (live tests need Ollama + SearXNG up).
+2. **Read `PHASE_4_KICKOFF.md`** (project root) — the full onboarding prompt for Phase 4, incl. the
+   carry-over items below.
+3. **Carry-over open items (do these as part of Phase 4):**
+   - **PDF live**: WeasyPrint is pip-installed but its **GTK runtime is missing on Windows**, so
+     `core/exporter.build_management_pdf` fails fast at import (instructions included). Install the
+     GTK3 runtime, then live-verify PDF; build the T-1..T-6 brief templates on this path.
+   - **Playbook reviews (RULE 14)**: `playbooks/deep_research_playbook.md` and
+     `playbooks/doc_prep_playbook.md` are authored content **awaiting user review** — surface them,
+     don't silently rewrite.
+   - **`core/exporter.py` already exists** (Phase-3.5 slice: `build_management_deck` +
+     `build_management_pdf`). Phase 4 **extends/absorbs** it (10 slide types, all brief templates,
+     `excel_builder.py` E-1..E-4) — do not duplicate. `assets/neura_logo.png` is still **missing**
+     (needed bottom-right on decks) — add it before building decks.
+4. Phase 4 = Output Generation (SPEC §15): Jinja2 briefs T-1..T-6 + WeasyPrint PDF; python-pptx 10
+   slide types (Neura colors, logo); `excel_builder.py` E-1..E-4 (formula integrity, N-10); wire
+   rendering into the **research** path too (turn `PipelineResult.routed_formats` into files like
+   doc-prep already does). Business Case = dual output (deck + Excel, N-6).
+
 ### PHASE 3.5 STATUS: ✅ COMPLETE
 (Code complete, 141 tests green, ruff/mypy --strict clean (27 files), pushed. Web-research loop:
 LOW + HIGH live-verified. CEO-office document-preparation mode: routing + ambiguity-ask, deep
