@@ -4,15 +4,24 @@ A 100% local AI research/strategy agent turning research-heavy tasks into profes
 **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on your
 machine with no external AI APIs, ever.
 
-> **Status: Phase 3.5 (Advanced Agent Loop) complete.** The agent is now a non-linear,
-> self-correcting, multi-agent loop. A single **effort dial** (`low` / `high` / `ultra`,
-> auto-detected and overridable) drives the whole run. A **research manager** decomposes the task
-> and runs **N parallel research workers**, each following an explicit deep-research methodology
-> (authoritative + recent + cross-referenced sources; a source, date, and confidence on every
-> fact). It can pause **mid-research** to ask a precise question, then an **output critic** scores
-> the draft against a rubric and forces targeted **revisions** before delivery. File rendering
-> (PDF/PPTX/Excel), memory, and voice land in Phases 4–5. See `PROGRESS.md` for the live status
-> and `strategy_agent_SPEC.md` (incl. §15.5) for the full specification.
+> **Status: Phase 4 (Output Generation) complete.** The agent now turns its analysis into the
+> three real deliverables — a **PDF brief** (Jinja2 → WeasyPrint, templates T-1..T-6), a
+> **Neura-styled PPTX deck** (python-pptx, all 10 slide types, logo bottom-right), and an **Excel
+> workbook** (openpyxl, 4 templates: Decision Matrix · Benchmark · Business-Case model · Tracker).
+> Excel workbooks are **formula-driven** — change a yellow input cell and weighted scores, ranks,
+> NPV/IRR and projections recalculate in MS Excel (no hardcoded intermediates). A **business case**
+> emits a deck **and** a financial model in one run. Rendering is wired into both the research and
+> the CEO-office document-prep paths and is **fail-open** (a renderer failure never loses the
+> analysis). Built on the Phase-3.5 loop: one **effort dial** (`low` / `high` / `ultra`,
+> auto-detected and overridable) drives a multi-agent **research manager** (N parallel workers,
+> source + date + confidence on every fact), **mid-research** clarification, and an **output
+> critic** + **revision** loop. Memory (ChromaDB) and voice land in Phase 5. See `PROGRESS.md` for
+> live status and `strategy_agent_SPEC.md` (incl. §15.5) for the full specification.
+>
+> **PDF note (Windows):** PPTX + Excel are fully local and work out of the box. PDF briefs use
+> WeasyPrint, which needs the **GTK3 runtime** on Windows. Install it once (see
+> [PDF rendering](#pdf-rendering-weasyprint-gtk) below) and PDF renders with zero code changes;
+> until then the agent fails fast with exact instructions and still ships the other deliverables.
 
 ---
 
@@ -41,6 +50,9 @@ python -m venv .venv
 # 2. Install Phase 1 + Phase 2 dependencies
 pip install pydantic pyyaml typer rich python-dotenv openai requests httpx pytest pytest-asyncio ruff mypy
 pip install aiohttp trafilatura diskcache pdfplumber pytesseract Pillow pandas openpyxl
+
+# 3. Install Phase 4 output dependencies (PPTX/Excel work immediately; PDF needs GTK — see below)
+pip install python-pptx openpyxl xlsxwriter jinja2 weasyprint
 ```
 
 `requirements.txt` lists the **full** dependency set for all phases. The heavier
@@ -77,10 +89,28 @@ curl "http://localhost:8888/search?q=test&format=json"
 If SearXNG is down or JSON is disabled, the `research` command fails fast with the exact
 fix instructions — the rest of the agent (`ask`, REPL, `analyze-doc`) still works without it.
 
+### PDF rendering (WeasyPrint GTK) <a name="pdf-rendering-weasyprint-gtk"></a>
+
+PPTX and Excel outputs are pure Python and work out of the box. **PDF briefs** use WeasyPrint,
+which on **Windows** needs the **GTK3 runtime** (Pango/Cairo/GObject). One-time install:
+
+1. Download the GTK3 runtime installer from the
+   [GTK-for-Windows releases](https://github.com/tschoonj/GTK-for-Windows-Runtime-Installer/releases/latest)
+   (`gtk3-runtime-*-win64.exe`).
+2. Run it and **tick "Set up PATH environment variable to include GTK+"**.
+3. **Reopen the terminal** and re-run — PDF now renders, no code changes.
+
+The agent automatically puts a detected GTK runtime ahead of any conflicting `libgobject` on
+`PATH` (e.g. one shipped by Tesseract). If GTK lives in a non-standard folder, point the agent at
+its `bin` directory via `output.gtk_runtime_path` in `config.yaml`. Until GTK is present, PDF
+rendering fails fast with these instructions while PPTX/Excel still ship.
+
 ## Usage
 
 ```powershell
-# Full agent run (intent → clarify → multi-agent research → critique/revise → analysis).
+# Full agent run (intent → clarify → multi-agent research → critique/revise → analysis →
+# rendered deliverables in ./output/). The task type picks the format(s): a screen → Excel
+# decision matrix + PDF brief; a business case → PPTX deck + Excel model (both, in one run).
 python main.py analyze "Screen these 5 European robotics startups as M&A targets"
 python main.py analyze "Business case for Japan expansion: market size, investment, ROI"
 
@@ -163,20 +193,24 @@ via `--effort` / the REPL `/effort` prefix. `effort.worker_concurrency` caps how
 run at once — modest on a laptop (one local model serializes LLM calls), raised on a server. After a
 hardware upgrade you just edit these numbers — **zero code changes** to scale.
 
-## Project layout (through Phase 3.5)
+## Project layout (through Phase 4)
 
 ```
-config.yaml            # single source of all tunable params (incl. the effort dial)
-main.py                # entry point: analyze [--effort] / ask / research / analyze-doc / REPL
+config.yaml            # single source of all tunable params (effort dial, Neura colors, GTK path)
+main.py                # entry point: analyze [--effort] / ask / research / prepare / analyze-doc / REPL
 core/                  # config (+ effort), startup checks, REPL intake (+ pipeline wiring),
                        #   researcher (SearXNG + fetch + cache), pdf_reader, excel_reader,
                        #   intent_parser (+ effort detection), clarification, memory (brain inject),
                        #   playbooks, synthesizer, research_agent (worker + manager),
-                       #   critic (critique + revise), pipeline (the master loop), json_utils
+                       #   critic (critique + revise), pipeline (the master loop), json_utils,
+                       #   content_shaper (analysis → typed deck/workbook), exporter (PDF + PPTX),
+                       #   excel_builder (E-1..E-4, formula-driven), doc_synthesis (CEO-office mode)
 llm/                   # backend-agnostic LocalLLMClient (text + Ollama vision)
 models/                # Pydantic v2 data contracts (all phases)
-playbooks/             # research / analysis / output / deep_research rulebooks
-tests/                 # pytest suite (127 tests)
+templates/briefs/      # Jinja2 brief templates T-1..T-6 (+ shared Neura CSS/macros)
+assets/                # neura_logo.png (deck logo, bottom-right)
+playbooks/             # research / analysis / output / deep_research / doc_prep rulebooks
+tests/                 # pytest suite (177 tests)
 docker-compose.yml     # SearXNG
 ```
 

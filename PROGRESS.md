@@ -621,7 +621,9 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
        path** + doc-prep path; business-case dual output verified (N-6: .pptx+.xlsx in one run);
        `excel_builder.build_workbook` dispatcher; `render_result` "Phase 4" caveat removed; tests
        route output to tmp_path (no ./output pollution) (done 2026-05-31 — 177 green)
-[ ] 10. Quality gate (ruff + mypy --strict + pytest) + live runs + PROGRESS/README + push
+[x] 10. Quality gate (ruff format 49 + ruff check + mypy --strict 29 + 177 pytest, all green) +
+        live deliverable renders (board PPTX w/ logo · screening matrix w/ live SUMPRODUCT/RANK ·
+        business-case deck+xlsx N-6) + PROGRESS/README/WORKFLOW + push (done 2026-05-31)
 
 ### Key Technical Decisions (Phase 4)
 | Decision | Choice | Reason |
@@ -644,9 +646,93 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
   `gtk3-runtime-*-win64.exe`, enable "set up PATH"), reopen the terminal — then PDF renders with no
   code change. PPTX + Excel are fully local (no GTK).
 
-### Tests Status (running)
-- Task 2: **146 passed** (+5 brief). Task 3: **148** (+2 deck). Task 4: **153** (+5 shape_deck).
-  Task 5: **160** (+7 E-1 Excel). ruff + `mypy --strict` clean (29 files after Task 5).
+### What Was Built (Phase 4)
+- **Brief system (T-1..T-6)** — `templates/briefs/` six bilingual Jinja2 **HTML** templates
+  (competitor / decision / market / board / document-synthesis / adhoc) + shared `_styles.md.j2`
+  (Neura CSS, all colors from config) + `_macros.md.j2`. `exporter.render_brief_html` (pure,
+  testable) + `build_brief_pdf` (task-type→template, base64-embedded logo, bullet/paragraph body
+  conversion, HTML-escaped → WeasyPrint). `_ensure_gtk_dll_dir` forces a found GTK `bin` ahead of
+  any incompatible `libgobject` on PATH.
+- **Deck renderer (all 10 slide types)** — `exporter._DeckRenderer` + `build_deck(DeckStructure)`:
+  title / exec-summary / market / company / financial / competitive-comparison (styled table) /
+  strategic-signals / SWOT (2×2 grid) / recommendation (decision callout) / appendix. Neura colors,
+  Arial, borderless rounded rects, **logo bottom-right on every slide**. `management_deck_structure`
+  is the deterministic fallback; `build_management_deck` delegates (back-compat).
+- **`core/content_shaper.py`** — `shape_deck` (prose `AnalysisOutput` → typed `DeckStructure` with
+  "so what" headlines + SCR ordering for business cases) and `shape_workbook` (task-type→template
+  routing + per-template structured extraction → E-1..E-4 data). One LLM call each, **fail-open** to
+  deterministic builders.
+- **`core/excel_builder.py` (E-1..E-4, all formula-driven, N-10)** — `build_decision_matrix`
+  (yellow weights row, `=SUMPRODUCT` weighted scores, `=RANK`, colour-scale + top-rank cond-fmt,
+  Criteria_Guide + Research_Notes), `build_benchmark_table` (Excel Table + auto-filter + Sources),
+  `build_business_case` (5 tabs: Summary NPV/IRR formulas · Assumptions all-yellow · Projections &
+  Scenarios formula-linked · Sources/Audit), `build_tracker` (Dashboard COUNTIF formulas, Status/
+  Priority data-validation dropdowns, cond-fmt, Archive). `build_workbook` dispatcher.
+- **Pipeline wiring** — `_render_outputs` renders all three formats (shaping decks/Excel first) and
+  is now called in the **research path** as well as doc-prep; business case → Deck + Excel in one run
+  (N-6). Fail-open per renderer. `render_result` drops the "Phase 4" caveat and lists deliverables.
 
-### PHASE 4 STATUS: ⏳ IN PROGRESS
+### Files Created/Modified (Phase 4)
+| File | Status | Key Contents |
+|------|--------|-------------|
+| templates/briefs/*.md.j2 (8) | Created | T-1..T-6 + shared _styles + _macros |
+| assets/neura_logo.png | Created | NEURA wordmark (user-provided) |
+| core/exporter.py | Modified | brief render + build_deck (10 types) + GTK bootstrap; back-compat shims |
+| core/content_shaper.py | Created | shape_deck + shape_workbook (+ routing, fail-open) |
+| core/excel_builder.py | Created | E-1..E-4 builders + build_workbook dispatcher |
+| core/pipeline.py | Modified | _render_outputs (3 formats) wired into research path |
+| core/intake.py | Modified | render_result deliverables panel (no Phase-4 caveat) |
+| models/workbook.py | Modified | DecisionMatrix/Benchmark/BusinessCase/Tracker data + items |
+| core/config.py / config.yaml | Modified | OutputConfig.gtk_runtime_path |
+| pyproject.toml | Modified | mypy overrides + openpyxl |
+| tests/test_exporter.py / test_content_shaper.py / test_excel_builder.py | Created/Modified | +9 / +11 / +17 |
+| tests/test_pipeline.py / test_intake.py | Modified | tmp_path output, N-6 dual-output, deliverables panel |
+| README.md | Modified | Phase 4 status, GTK section, layout |
+
+### Tests Status (final)
+- **177 passed, 1 skipped** (live SearXNG) — up from 141. ruff format (49 files) + ruff check clean;
+  `mypy --strict core llm models main.py` clean (29 files). N-10 formula integrity verified by
+  re-opening each workbook with `data_only=True` and asserting formula cells return `None` (no
+  hardcoded intermediates) for E-1 (SUMPRODUCT/RANK), E-3 (NPV/IRR/projections), and E-4 dashboard.
+
+### Live Verification (this session, offline renders)
+- **Board deck** → 3-slide Neura `.pptx`, **logo bottom-right on every slide** (shape_type 13 count
+  == slide count). ✅
+- **Screening** → Excel decision matrix with live `=SUMPRODUCT(B7:D7,$B$6:$D$6)` + `=RANK(...)`;
+  changing a weight recalculates (data_only re-open returns None → pure formula). ✅
+- **Business case** → **PPTX deck + Excel model in one run** (N-6); Summary NPV =
+  `=-Assumptions!$B$4+NPV(Assumptions!$B$9,Projections!E7:E9)`. ✅
+- **Bilingual** → DE/EN labels verified in brief HTML + Excel headers. ✅
+- **PDF** → fails fast with exact GTK instructions (renderer correct; see below). PPTX/Excel live. 
+
+### Carry-over / Known Issues (Phase 4)
+- **PDF live still needs GTK (user action).** WeasyPrint cannot load GTK in this environment: the
+  Tesseract folder ships an incompatible `libgobject-2.0-0.dll` earlier on PATH and **no real GTK3
+  runtime is installed**. Auto-install was attempted (GitHub direct download, winget MSYS2) but the
+  agent shell's network **intercepts TLS / blocks external downloads** (server-certificate mismatch),
+  and a system GTK install needs admin — so this must be done by the user. **Code is complete:**
+  PDF is unit-tested at the HTML layer, fails fast with exact instructions, and `_ensure_gtk_dll_dir`
+  will pick up a GTK runtime the moment one exists (incl. forcing it ahead of Tesseract's libgobject).
+  **To go live:** install the GTK3 runtime (tschoonj `gtk3-runtime-*-win64.exe`, tick "set up PATH"),
+  reopen the terminal → PDF renders, zero code change. PPTX + Excel never need GTK.
+- **Authored playbooks** (`deep_research_playbook.md`, `doc_prep_playbook.md`) — **user-approved
+  as-is** this session (RULE 14); left unchanged.
+- Deck/Excel **shaping** adds one LLM call per deliverable; fail-open fallbacks keep delivery robust
+  if the local model returns bad JSON. On the single local gemma4 these calls serialize (seconds).
+
+### What to do FIRST next session (Phase 5 starting point)
+1. Run `python -m pytest tests/ -v` — verify **177 pass** (live tests need Ollama + SearXNG up).
+2. **Install the GTK3 runtime** (see README → "PDF rendering") and live-verify a PDF:
+   `python main.py analyze "Competitor brief on Figure AI"` → a `.pdf` in `./output/`.
+3. Phase 5 (SPEC §15): ChromaDB memory (`core/memory.py` write/read via `nomic-embed-text`), delta
+   analysis, brain.md seeding from SPEC §3.5 + the propose-additions REPL flow, voice
+   (`voice_input.py`, Ctrl+Space → faster-whisper), and end-to-end production polish. The renderers
+   (`exporter` / `excel_builder` / `content_shaper`) and the wired pipeline are ready to consume.
+
+### PHASE 4 STATUS: ✅ COMPLETE
+(All three output types render production-quality deliverables — PDF briefs T-1..T-6, Neura PPTX
+decks (10 slide types, logo), and 4 formula-driven Excel templates (N-10). Rendering wired into both
+the research and doc-prep paths; business case = dual output (N-6). 177 tests green, ruff + mypy
+--strict clean. PPTX + Excel live-verified; PDF code-complete + fail-fast pending the user's one-time
+GTK install.)
 ---
