@@ -52,13 +52,18 @@ _PPTX_FIX = (
     "Fix: install python-pptx into the venv:\n  .venv\\Scripts\\python -m pip install python-pptx"
 )
 _PDF_FIX = (
-    "PDF rendering needs WeasyPrint + the GTK runtime.\n"
-    "Fix (Windows, one-time):\n"
-    "  1. .venv\\Scripts\\python -m pip install weasyprint\n"
-    "  2. Install the GTK3 runtime (provides libgobject/pango/cairo):\n"
-    "     https://github.com/tschoonj/GTK-for-Windows-Runtime-Installer/releases\n"
-    "  3. Reopen the terminal, then re-run.\n"
-    "Details: https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#troubleshooting"
+    "PDF rendering needs WeasyPrint + the GTK/Pango runtime (PPTX + Excel work without it).\n"
+    "Fix (Windows, one-time) — recommended via MSYS2 (auto-detected at C:\\msys64\\mingw64\\bin):\n"
+    "  1. Install MSYS2 from https://www.msys2.org/ (keep the default C:\\msys64).\n"
+    "  2. Open the 'MSYS2 MINGW64' terminal and run:\n"
+    "       pacman -S mingw-w64-x86_64-pango\n"
+    "     (pulls in cairo/glib/harfbuzz — everything WeasyPrint needs).\n"
+    "  3. Reopen this terminal, then re-run.\n"
+    "Alternative: install the GTK3 runtime (open the repo, then Releases):\n"
+    "  https://github.com/tschoonj/GTK-for-Windows-Runtime-Installer  (tick 'set up PATH').\n"
+    "If GTK lives elsewhere, set output.gtk_runtime_path in config.yaml to its 'bin' dir.\n"
+    "Docs: https://www.gtk.org/docs/installations/windows/ · "
+    "https://doc.courtbouillon.org/weasyprint/stable/first_steps.html#troubleshooting"
 )
 
 

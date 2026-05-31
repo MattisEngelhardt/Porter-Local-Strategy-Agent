@@ -92,17 +92,23 @@ fix instructions — the rest of the agent (`ask`, REPL, `analyze-doc`) still wo
 ### PDF rendering (WeasyPrint GTK) <a name="pdf-rendering-weasyprint-gtk"></a>
 
 PPTX and Excel outputs are pure Python and work out of the box. **PDF briefs** use WeasyPrint,
-which on **Windows** needs the **GTK3 runtime** (Pango/Cairo/GObject). One-time install:
+which on **Windows** needs the **GTK/Pango runtime** (Pango/Cairo/GLib). See the official
+[GTK on Windows guide](https://www.gtk.org/docs/installations/windows/). Two one-time options:
 
-1. Download the GTK3 runtime installer from the
-   [GTK-for-Windows releases](https://github.com/tschoonj/GTK-for-Windows-Runtime-Installer/releases/latest)
-   (`gtk3-runtime-*-win64.exe`).
-2. Run it and **tick "Set up PATH environment variable to include GTK+"**.
-3. **Reopen the terminal** and re-run — PDF now renders, no code changes.
+**Recommended — MSYS2** (the agent auto-detects `C:\msys64\mingw64\bin`):
 
-The agent automatically puts a detected GTK runtime ahead of any conflicting `libgobject` on
-`PATH` (e.g. one shipped by Tesseract). If GTK lives in a non-standard folder, point the agent at
-its `bin` directory via `output.gtk_runtime_path` in `config.yaml`. Until GTK is present, PDF
+1. Install [MSYS2](https://www.msys2.org/) (keep the default `C:\msys64`).
+2. Open the **"MSYS2 MINGW64"** terminal and run: `pacman -S mingw-w64-x86_64-pango`
+   (pulls in cairo/glib/harfbuzz — everything WeasyPrint needs).
+3. **Reopen** the VS Code terminal and re-run — PDF now renders, no code changes.
+
+**Alternative — GTK3 runtime installer:** open the
+[GTK-for-Windows repo](https://github.com/tschoonj/GTK-for-Windows-Runtime-Installer) → **Releases**
+→ download `gtk3-runtime-*-win64.exe`, run it and **tick "Set up PATH"**, then reopen the terminal.
+
+The agent automatically puts a detected GTK/Pango runtime **ahead of** any conflicting `libgobject`
+on `PATH` (e.g. one shipped by Tesseract). If it lives in a non-standard folder, point the agent at
+its `bin` directory via `output.gtk_runtime_path` in `config.yaml`. Until it is present, PDF
 rendering fails fast with these instructions while PPTX/Excel still ship.
 
 ## Usage
