@@ -30,7 +30,7 @@ from core.pipeline import AutoInteraction, run_pipeline
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.task import EffortLevel, TaskRequest
+from models.task import EffortLevel, OutputFormat, TaskRequest
 
 
 def _force_utf8_io() -> None:
@@ -224,6 +224,13 @@ def analyze(
     render_result(console, result, config.output.colors.accent_cyan)
 
 
+_FORMAT_CHOICES: dict[str, list[OutputFormat]] = {
+    "brief": [OutputFormat.BRIEF],  # PDF
+    "deck": [OutputFormat.DECK],  # PPTX
+    "both": [OutputFormat.BRIEF, OutputFormat.DECK],
+}
+
+
 @app.command()
 def prepare(
     ctx: typer.Context,
@@ -234,13 +241,31 @@ def prepare(
         str,
         typer.Option("--task", "-t", help="What to prepare (e.g. 'consolidate for the board')"),
     ] = "Consolidate these documents into one management briefing",
+    output_format: Annotated[
+        str,
+        typer.Option(
+            "--format", "-f", help="Output deliverable(s): brief (PDF) | deck (PPTX) | both"
+        ),
+    ] = "both",
 ) -> None:
-    """Consolidate internal documents into ONE management briefing (no web research).
+    """Consolidate internal documents into ONE management deliverable (no web research).
 
-    The CEO-office mode: reads the documents deeply, applies the doc-prep playbook (zero
-    hallucination, management structure), and writes a Markdown blueprint to ``./output/`` — the
-    cheat-sheet the final PDF/PPTX (Phase 4) renders from.
+    The CEO-office mode: reads several documents (PDF / image / .xlsx) deeply, applies the doc-prep
+    playbook (zero hallucination, management structure), writes a Markdown blueprint to ``output/``,
+    and renders the chosen deliverable(s): a Neura-styled **PPTX** deck (works locally) and/or a
+    **PDF** brief (needs WeasyPrint's GTK runtime; skipped with instructions if absent).
     """
+    formats = _FORMAT_CHOICES.get(output_format.lower())
+    if formats is None:
+        console.print(
+            Panel(
+                f"Unknown --format '{output_format}'. Choose: brief | deck | both.",
+                title="bad option",
+                border_style="red",
+            )
+        )
+        raise typer.Exit(code=1)
+
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
     config, client = _bootstrap(config_path)  # LLM client enables the vision fallback for scans
@@ -248,13 +273,16 @@ def prepare(
     try:
         with console.status("[dim]reading documents…[/dim]", spinner="dots"):
             documents = [read_document(path, llm=client) for path in files]
-        with console.status("[dim]preparing management briefing…[/dim]", spinner="dots"):
+        with console.status(
+            "[dim]reading deeply + rendering management briefing…[/dim]", spinner="dots"
+        ):
             result = run_pipeline(
                 client,
                 config,
                 TaskRequest(raw_input=task_text),
                 AutoInteraction(),
                 documents=documents,
+                doc_formats=formats,
             )
     except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
         console.print(Panel(str(exc), title="document error", border_style="red"))

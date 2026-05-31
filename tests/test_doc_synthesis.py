@@ -16,8 +16,8 @@ from core.doc_synthesis import (
     to_management_markdown,
     write_briefing_md,
 )
-from core.intent_parser import route_mode
-from core.pipeline import AutoInteraction, run_pipeline
+from core.intent_parser import classify_work_mode, route_mode
+from core.pipeline import AutoInteraction, _resolve_doc_mode, run_pipeline
 from core.playbooks import load_playbooks
 from models.research import DocContent
 from models.task import Intent, Language, OutputFormat, TaskRequest, TaskType, WorkMode
@@ -83,6 +83,63 @@ def test_route_mode_explicit_research_overrides_documents() -> None:
         == WorkMode.RESEARCH
     )
     assert route_mode("Recherchiere dazu", True, TaskType.ADHOC) == WorkMode.RESEARCH
+
+
+def test_classify_work_mode_returns_none_when_unsure() -> None:
+    """Ambiguous tasks with documents return None (→ caller asks); clear ones are decided."""
+    assert classify_work_mode("market overview of robotics", has_documents=False) == (
+        WorkMode.RESEARCH
+    )
+    assert classify_work_mode("Consolidate these for the board", has_documents=True) == (
+        WorkMode.DOCUMENT_PREP
+    )
+    assert classify_work_mode("Recherchiere die aktuelle Marktdaten", has_documents=True) == (
+        WorkMode.RESEARCH
+    )
+    # Documents attached but no clear instruction → unsure → None (the agent must ask).
+    assert classify_work_mode("Here are some files I need handled.", has_documents=True) is None
+
+
+class _ChoiceInteraction:
+    """Records ask_choice questions and returns a preset choice."""
+
+    def __init__(self, choice: str) -> None:
+        self.choice = choice
+        self.asked: list[str] = []
+
+    def ask_choice(self, question: str, options: list[str]) -> str:
+        self.asked.append(question)
+        return self.choice
+
+    def ask_text(self, question: str) -> str:
+        return ""
+
+    def confirm(self, prompt: str) -> bool:
+        return True
+
+    def notify(self, message: str) -> None:
+        pass
+
+
+def test_resolve_doc_mode_asks_only_when_unsure() -> None:
+    """A clear task decides without asking; an unclear one asks and honors the user's choice."""
+    # Clear doc-prep task → no question asked.
+    clear = _ChoiceInteraction("ignored")
+    assert _resolve_doc_mode("Consolidate these for the board", clear, Language.EN) == (
+        WorkMode.DOCUMENT_PREP
+    )
+    assert clear.asked == []
+
+    # Unclear task → the agent asks; the user picks research.
+    ask_research = _ChoiceInteraction("Research the web")
+    assert _resolve_doc_mode("Here are some files.", ask_research, Language.EN) == WorkMode.RESEARCH
+    assert len(ask_research.asked) == 1
+
+    # Unclear task → the user picks prepare.
+    ask_prep = _ChoiceInteraction("Only prepare for management")
+    assert _resolve_doc_mode("Here are some files.", ask_prep, Language.EN) == (
+        WorkMode.DOCUMENT_PREP
+    )
 
 
 # ------------------------------------------------------------ clarifying questions

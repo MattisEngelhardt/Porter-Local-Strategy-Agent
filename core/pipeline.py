@@ -21,6 +21,7 @@ headless :class:`AutoInteraction` here. This module imports no presentation libr
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Protocol
 
 from core.clarification import clarify
@@ -32,7 +33,8 @@ from core.doc_synthesis import (
     to_management_markdown,
     write_briefing_md,
 )
-from core.intent_parser import parse_intent, route_mode
+from core.exporter import ExportError, build_management_deck, build_management_pdf
+from core.intent_parser import classify_work_mode, parse_intent
 from core.json_utils import extract_json_array
 from core.memory import load_brain
 from core.playbooks import load_playbooks
@@ -274,6 +276,67 @@ def _critique_and_revise(
     return analysis, crit, revisions
 
 
+def _resolve_doc_mode(task_text: str, interaction: Interaction, language: Language) -> WorkMode:
+    """Resolve the work mode when documents are attached; ask the user if it is unclear (§15.5).
+
+    A clear "consolidate for management" phrase → DOCUMENT_PREP; a clear web-research phrase →
+    RESEARCH; otherwise the agent does not guess — it asks the user which mode to use. Headless
+    interactions (no human) pick the first option (prepare-only), since documents are present.
+    """
+    decided = classify_work_mode(task_text, has_documents=True)
+    if decided is not None:
+        return decided
+    prepare_label = _t(language, "Nur fürs Management aufbereiten", "Only prepare for management")
+    research_label = _t(language, "Recherchieren", "Research the web")
+    choice = interaction.ask_choice(
+        _t(
+            language,
+            "Du hast Dokumente angehängt. Soll ich sie nur fürs Management aufbereiten "
+            "(keine Recherche) oder dazu im Web recherchieren?",
+            "You attached documents. Should I only prepare them for management (no research), "
+            "or also research the web?",
+        ),
+        [prepare_label, research_label],
+    )
+    lowered = choice.strip().lower()
+    if "rech" in lowered or "research" in lowered or lowered in {"2", research_label.lower()}:
+        return WorkMode.RESEARCH
+    return WorkMode.DOCUMENT_PREP
+
+
+def _render_outputs(
+    config: AppConfig, intent: Intent, analysis: AnalysisOutput, interaction: Interaction
+) -> list[Path]:
+    """Render the routed deliverables (PDF for brief, PPTX for deck). Fail-open per renderer.
+
+    A renderer failure (e.g. WeasyPrint's GTK runtime missing) never loses the briefing — it is
+    reported via ``notify`` and the other outputs (and the .md blueprint) still ship.
+    """
+    files: list[Path] = []
+    out_dir = config.output.output_dir
+    if OutputFormat.DECK in intent.output_formats:
+        try:
+            deck = build_management_deck(analysis, config, out_dir, intent.language)
+            files.append(deck)
+            interaction.notify(
+                _t(intent.language, f"Deck erstellt: {deck}", f"Deck created: {deck}")
+            )
+        except ExportError as exc:
+            interaction.notify(
+                _t(intent.language, f"PPTX übersprungen: {exc}", f"PPTX skipped: {exc}")
+            )
+    if OutputFormat.BRIEF in intent.output_formats:
+        try:
+            pdf = build_management_pdf(analysis, config, out_dir, intent.language)
+            files.append(pdf)
+            interaction.notify(_t(intent.language, f"PDF erstellt: {pdf}", f"PDF created: {pdf}"))
+        except ExportError as exc:
+            interaction.notify(
+                _t(intent.language, f"PDF übersprungen: {exc}", f"PDF skipped: {exc}")
+            )
+    return files
+
+
 def _run_document_prep(
     client: LocalLLMClient,
     config: AppConfig,
@@ -318,12 +381,14 @@ def _run_document_prep(
     interaction.notify(
         _t(intent.language, f"Blueprint geschrieben: {path}", f"Blueprint written: {path}")
     )
+    output_files = _render_outputs(config, intent, analysis, interaction)
     return PipelineResult(
         intent=intent,
         routed_formats=intent.output_formats,
         answered=answered,
         analysis=analysis,
         effort=intent.effort,
+        output_files=output_files,
         mode=WorkMode.DOCUMENT_PREP.value,
         artifact_path=path,
     )
@@ -337,6 +402,7 @@ def run_pipeline(
     manager: ResearchManager | None = None,
     documents: list[DocContent] | None = None,
     effort_override: EffortLevel | None = None,
+    doc_formats: list[OutputFormat] | None = None,
 ) -> PipelineResult:
     """Run the full advanced agent loop for one task (SPEC §5.3 + §15.5).
 
@@ -361,8 +427,12 @@ def run_pipeline(
     intent = parse_intent(client, config, task, brain, effort_override=effort_override)
 
     docs = documents or []
-    if docs and route_mode(task.raw_input, True, intent.task_type) == WorkMode.DOCUMENT_PREP:
+    if docs and _resolve_doc_mode(task.raw_input, interaction, intent.language) == (
+        WorkMode.DOCUMENT_PREP
+    ):
         # Internal document-preparation mode: no research, no planning — read + consolidate.
+        if doc_formats:  # explicit format choice (e.g. `prepare --format deck`) wins over routing
+            intent = intent.model_copy(update={"output_formats": doc_formats})
         return _run_document_prep(client, config, intent, docs, brain, interaction)
 
     effort_cfg = config.effort.level_for(intent.effort)

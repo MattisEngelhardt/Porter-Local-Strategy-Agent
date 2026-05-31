@@ -36,5 +36,8 @@ module = [
     "pdfplumber",
     "pytesseract",
     "pandas",
+    "pptx",
+    "pptx.*",
+    "weasyprint",
 ]
 ignore_missing_imports = true

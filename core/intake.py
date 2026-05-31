@@ -147,21 +147,20 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
         console.print(Panel("\n".join(lines), title="sources", border_style="dim"))
 
     formats = ", ".join(fmt.value for fmt in result.routed_formats) or "brief"
-    console.print(
-        Panel(
-            f"Would generate: [bold]{formats}[/bold]  [dim](file rendering is Phase 4)[/dim]",
-            title="output plan",
-            border_style=accent,
-        )
-    )
-    if result.artifact_path is not None:
+    if result.output_files:
+        plan = f"Generated: [bold]{formats}[/bold]"
+    else:
+        plan = f"Would generate: [bold]{formats}[/bold]  [dim](file rendering is Phase 4)[/dim]"
+    console.print(Panel(plan, title="output plan", border_style=accent))
+    if result.artifact_path is not None or result.output_files:
+        lines = []
+        if result.output_files:
+            for file in result.output_files:
+                lines.append(f"📄 [bold]{file}[/bold]")
+        if result.artifact_path is not None:
+            lines.append(f"[dim]blueprint (.md cheat-sheet): {result.artifact_path}[/dim]")
         console.print(
-            Panel(
-                f"Blueprint (.md cheat-sheet for the final {formats}): "
-                f"[bold]{result.artifact_path}[/bold]",
-                title="document briefing written",
-                border_style=accent,
-            )
+            Panel("\n".join(lines), title="management briefing written", border_style=accent)
         )
     console.print(Panel(_telemetry_text(result), title="run telemetry", border_style="dim"))
 

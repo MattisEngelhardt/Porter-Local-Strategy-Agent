@@ -197,7 +197,9 @@ def route_outputs(
 # attached memo against the latest market data online").
 _RESEARCH_FORCE_KEYWORDS = (
     "recherchiere",
+    "recherche",
     "research online",
+    "research the",
     "search the web",
     "im internet",
     "aktuelle news",
@@ -207,20 +209,70 @@ _RESEARCH_FORCE_KEYWORDS = (
     "wettbewerb",
     "competitor",
     "online suchen",
+    "find out about",
+    "such nach",
+)
+
+# Phrases that clearly mean "consolidate these internal documents for management" (doc-prep).
+_DOCPREP_KEYWORDS = (
+    "fasse",
+    "zusammenfass",
+    "zusammen fass",
+    "aufbereit",
+    "aufzubereiten",
+    "bündel",
+    "buendel",
+    "konsolidier",
+    "consolidate",
+    "summarize",
+    "summarise",
+    "summary of",
+    "prepare",
+    "fürs management",
+    "für das management",
+    "for management",
+    "for the board",
+    "fürs board",
+    "board-ready",
+    "briefing",
+    "one-pager",
+    "aus diesen dokumenten",
+    "aus den dokumenten",
+    "from these documents",
+    "based on the attached",
+    "based on these",
 )
 
 
-def route_mode(task_text: str, has_documents: bool, task_type: TaskType) -> WorkMode:
-    """Decide whether a task needs web research or internal document preparation (Phase 3.5).
+def classify_work_mode(task_text: str, has_documents: bool) -> WorkMode | None:
+    """Classify the work mode, or return ``None`` when it is genuinely ambiguous (Phase 3.5).
 
-    Documents attached → DOCUMENT_PREP (consolidate them for management) unless the task
-    explicitly asks to pull fresh web data. No documents → RESEARCH (the default web loop).
+    No documents → always RESEARCH. With documents: an explicit web-research phrase → RESEARCH; an
+    explicit "consolidate for management" phrase → DOCUMENT_PREP; otherwise ``None`` — the caller
+    should ask the user rather than guess (the agent must be sure which mode it is in).
     """
     if not has_documents:
         return WorkMode.RESEARCH
     lowered = task_text.lower()
-    if any(kw in lowered for kw in _RESEARCH_FORCE_KEYWORDS):
+    research = any(kw in lowered for kw in _RESEARCH_FORCE_KEYWORDS)
+    docprep = any(kw in lowered for kw in _DOCPREP_KEYWORDS)
+    if research and not docprep:
         return WorkMode.RESEARCH
+    if docprep and not research:
+        return WorkMode.DOCUMENT_PREP
+    return None  # unclear (both or neither signal) → ask the user
+
+
+def route_mode(task_text: str, has_documents: bool, task_type: TaskType) -> WorkMode:
+    """Resolve a definite work mode (non-interactive). Ambiguity defaults to DOCUMENT_PREP.
+
+    Documents attached → DOCUMENT_PREP (consolidate them for management) unless the task clearly
+    asks to pull fresh web data. No documents → RESEARCH. Interactive callers should prefer
+    :func:`classify_work_mode` and ask the user when it returns ``None``.
+    """
+    decided = classify_work_mode(task_text, has_documents)
+    if decided is not None:
+        return decided
     return WorkMode.DOCUMENT_PREP
 
 

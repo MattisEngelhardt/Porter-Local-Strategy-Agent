@@ -538,13 +538,34 @@ researching. New pieces:
   effort.max_clarifications)); answers feed synthesis as guidance. Empty answers → assume + proceed.
 - **Pipeline/presentation** — `PipelineResult.mode` + `artifact_path`; `render_result` shows the
   blueprint path + a doc-prep telemetry line. **`main.py prepare <files…> --task`** CLI.
-- **Output:** PDF brief is the default deliverable, PPTX for board/presentation; both render from
-  the same `AnalysisOutput` in Phase 4. The `.md` blueprint is produced now as their cheat-sheet.
-- **Live-verified:** `prepare neura_q2_board.xlsx` → mode document-prep, bottom-line-first briefing,
-  **every figure attributed to the source file with exact numbers** (no hallucination), blueprint
-  `.md` written. Tests: +9 (routing, questions, guidance, briefing, markdown, write, pipeline branch).
+- **Output:** PDF brief and/or PPTX deck, both rendered from the same `AnalysisOutput`. The `.md`
+  blueprint (Spickzettel) is always written first as the cheat-sheet.
+
+### Addendum 2 — Real PPTX/PDF rendering + mode ambiguity ask (CEO-office, user-requested)
+The doc-prep skill now **produces the deliverables**, not just the blueprint:
+- **`core/exporter.py`** (the SPEC §7 name) — `build_management_deck` (python-pptx: dark title
+  slide, Executive Summary, one "so what" slide per theme, Sources; Neura colors from config, logo
+  bottom-right if present) and `build_management_pdf` (WeasyPrint HTML→PDF, Neura-styled). PPTX is
+  fully local and works now; PDF uses WeasyPrint (SPEC §6) and **fails fast with exact GTK-install
+  instructions** if the runtime is absent — renderer is correct, zero code change once GTK is in.
+- **Wiring** — `_render_outputs` renders the routed formats (PDF for brief, PPTX for deck),
+  **fail-open per renderer** (a render failure never loses the briefing); `PipelineResult.output_files`
+  carries the rendered paths; `render_result` lists them and stops saying "Phase 4" when real files
+  ship. `main.py prepare … --format brief|deck|both` (default both).
+- **Mode ambiguity ask** — `classify_work_mode()` returns `None` when documents are attached but the
+  instruction is unclear; `run_pipeline` then **asks the user** ("only prepare for management, or
+  also research?") instead of guessing (clear doc-prep / research phrases still decide instantly;
+  headless picks prepare). `route_mode` kept as the deterministic resolver.
+- **Deps:** `python-pptx` + `weasyprint` installed into the venv (both already in requirements.txt /
+  SPEC §6 — no new dependency). mypy overrides add `pptx`/`weasyprint`.
+- **Live-verified:** `prepare neura_q2_board.xlsx --format deck` → real 6-slide .pptx (Title · Exec
+  Summary · 3 "so what" theme slides · Sources), every figure attributed to the source file (no
+  hallucination), blueprint `.md` written. Tests: +13 total (routing incl. ambiguity, questions,
+  guidance, briefing, markdown, write, pipeline branch, deck build, PDF fail-fast).
 
 ### PHASE 3.5 STATUS: ✅ COMPLETE
-(Code complete, 143 tests green, ruff/mypy clean, pushed. Web-research loop: LOW + HIGH
-live-verified. CEO-office document-preparation mode added + live-verified.)
+(Code complete, 141 tests green, ruff/mypy --strict clean (27 files), pushed. Web-research loop:
+LOW + HIGH live-verified. CEO-office document-preparation mode: routing + ambiguity-ask, deep
+read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** — live-verified
+(6-slide deck from a Q2 xlsx, no hallucination). PDF needs WeasyPrint GTK runtime (fail-fast).)
 ---
