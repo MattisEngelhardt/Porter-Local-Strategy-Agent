@@ -12,15 +12,37 @@ restate the SPEC §11/§13 structure rules; the facts come from the analysis.
 from __future__ import annotations
 
 from core.exporter import management_deck_structure
-from core.json_utils import extract_json_array
+from core.json_utils import extract_json_array, extract_json_object
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput
 from models.task import Intent, Language, TaskType
+from models.workbook import (
+    BenchmarkData,
+    BenchmarkRow,
+    BenchmarkSource,
+    BusinessCaseData,
+    CaseAssumption,
+    DecisionMatrixData,
+    EntityScores,
+    ExcelTemplate,
+    ScoringCriterion,
+    TrackerData,
+    TrackerItem,
+)
+
+# Structured Excel content shaped from the analysis (template + its typed data).
+WorkbookData = DecisionMatrixData | BenchmarkData | BusinessCaseData | TrackerData
 
 # Cap on shaped slides so a runaway response can't produce a 50-slide deck.
 _MAX_SLIDES = 12
 _SLIDE_TYPES = ", ".join(t.value for t in SlideType)
+
+
+def _t(language: Language, de: str, en: str) -> str:
+    """Pick the German or English string for the language."""
+    return de if language == Language.DE else en
+
 
 _DECK_SYSTEM = """You are a management-deck designer at Neura Robotics (pre-IPO cognitive humanoid \
 robotics, Metzingen). Turn the analysis below into a sequence of board/management slides.
@@ -150,3 +172,325 @@ def shape_deck(
             0, SlideContent(slide_type=SlideType.TITLE, headline=analysis.title, body=None)
         )
     return DeckStructure(title=analysis.title, language=intent.language, slides=slides)
+
+
+# ============================================================ workbook shaping (E-1..E-4)
+# Deterministic task-type → Excel template routing (SPEC §12 / §5.4).
+_TEMPLATE_FOR_TASK: dict[TaskType, ExcelTemplate] = {
+    TaskType.TARGET_SCREENING: ExcelTemplate.DECISION_MATRIX,
+    TaskType.PARTNERSHIP_EVALUATION: ExcelTemplate.DECISION_MATRIX,
+    TaskType.OPTION_COMPARISON: ExcelTemplate.DECISION_MATRIX,
+    TaskType.STRATEGIC_INITIATIVE: ExcelTemplate.DECISION_MATRIX,
+    TaskType.FINANCIAL_BENCHMARK: ExcelTemplate.BENCHMARK_TABLE,
+    TaskType.MARKET_ANALYSIS: ExcelTemplate.BENCHMARK_TABLE,
+    TaskType.BUSINESS_CASE: ExcelTemplate.BUSINESS_CASE_MODEL,
+    TaskType.PIPELINE_TRACKING: ExcelTemplate.TRACKER_DASHBOARD,
+}
+
+
+def workbook_template_for(task_type: TaskType) -> ExcelTemplate:
+    """Map a task type to its Excel template (SPEC §12); defaults to the Decision Matrix (E-1)."""
+    return _TEMPLATE_FOR_TASK.get(task_type, ExcelTemplate.DECISION_MATRIX)
+
+
+def _as_list(value: object) -> list[object]:
+    """Return ``value`` as a list of objects (empty if it is not a list) — narrows for mypy."""
+    return list(value) if isinstance(value, list) else []
+
+
+def _coerce_float(value: object, default: float = 0.0) -> float:
+    """Coerce a raw JSON value (number or numeric string) into a float."""
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        cleaned = value.strip().replace(",", "").replace("%", "").replace("€", "").replace("$", "")
+        try:
+            return float(cleaned)
+        except ValueError:
+            return default
+    return default
+
+
+def _shape_json(
+    client: LocalLLMClient, system: str, user: str, *, use_thinking: bool
+) -> dict[str, object] | None:
+    """Run one structured shaping call and return the parsed JSON object (fail-open → None)."""
+    try:
+        response = client.generate(user, system=system, use_thinking=use_thinking)
+    except LLMError:
+        return None
+    return extract_json_object(response)
+
+
+# ---------------------------------------------------------------- E-1 Decision Matrix shaping
+_MATRIX_SYSTEM = """You build a weighted decision/scoring matrix for Neura Robotics' Corporate \
+Development team. From the analysis, extract the entities being compared and the scoring criteria.
+
+Rules:
+- Pick 4-6 decision criteria appropriate to the task (e.g. M&A screen: Technology Fit, Market \
+Access, Integration Complexity, Valuation Signal, Team Quality — analysis_playbook §13).
+- Assign each criterion a weight (relative importance); they need not sum to 100 (normalized later).
+- Score each entity 1 (worst) .. 5 (best) on each criterion, in the SAME order as the criteria.
+- Only use entities and facts present in the analysis; do NOT invent companies.
+
+Respond with ONLY a JSON object — no prose:
+{"criteria": [{"name": "...", "weight": 25, "definition": "how to score 1..5"}],
+ "entities": [{"name": "...", "scores": [4,3,5,...], "notes": ["evidence per criterion", ...]}]}"""
+
+
+def _fallback_matrix(intent: Intent, analysis: AnalysisOutput) -> DecisionMatrixData:
+    """Deterministic E-1 data when shaping fails: entities from sources, generic criteria."""
+    criteria = [
+        ScoringCriterion(name=name, weight=1.0)
+        for name in ("Strategic Fit", "Market Access", "Execution Risk", "Financial Signal")
+    ]
+    seen: list[str] = []
+    for source in analysis.sources:
+        label = source.title or source.url
+        if label and label not in seen:
+            seen.append(label)
+    entities = [EntityScores(name=name[:60], scores=[3, 3, 3, 3]) for name in seen[:6]] or [
+        EntityScores(name=_t(intent.language, "Option A", "Option A"), scores=[3, 3, 3, 3])
+    ]
+    return DecisionMatrixData(
+        title=analysis.title, language=intent.language, criteria=criteria, entities=entities
+    )
+
+
+def _shape_matrix(
+    client: LocalLLMClient, intent: Intent, analysis: AnalysisOutput, *, use_thinking: bool
+) -> DecisionMatrixData:
+    """Shape an E-1 Decision Matrix from the analysis (fail-open to a deterministic matrix)."""
+    language = "German" if intent.language == Language.DE else "English"
+    data = _shape_json(
+        client,
+        _MATRIX_SYSTEM + f"\nWrite criterion names/notes in {language}.",
+        _analysis_block(analysis),
+        use_thinking=use_thinking,
+    )
+    if not data:
+        return _fallback_matrix(intent, analysis)
+    criteria: list[ScoringCriterion] = []
+    for item in _as_list(data.get("criteria")):
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            criteria.append(
+                ScoringCriterion(
+                    name=str(item["name"]).strip(),
+                    weight=_coerce_float(item.get("weight"), 1.0) or 1.0,
+                    definition=str(item.get("definition") or "").strip(),
+                )
+            )
+    entities: list[EntityScores] = []
+    for item in _as_list(data.get("entities")):
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            scores = [int(_coerce_float(s, 3)) for s in _as_list(item.get("scores"))]
+            notes = [str(x) for x in _as_list(item.get("notes"))]
+            entities.append(
+                EntityScores(name=str(item["name"]).strip(), scores=scores, notes=notes)
+            )
+    if not criteria or not entities:
+        return _fallback_matrix(intent, analysis)
+    return DecisionMatrixData(
+        title=analysis.title, language=intent.language, criteria=criteria, entities=entities
+    )
+
+
+# ---------------------------------------------------------------- E-2 Benchmark shaping
+_BENCHMARK_SYSTEM = """You build a factual benchmark table (no scoring) for Neura Robotics. From \
+the analysis, extract the entities and the metrics to compare them on.
+
+Rules:
+- Choose 4-8 relevant metric columns (e.g. Founded, HQ, Total Funding, Last Round, Lead Investor, \
+Valuation, Headcount, Core Product). Facts only — no opinions or scores.
+- One row per entity, values in the SAME order as the metrics. Use "" for unknowns.
+- Only entities/facts present in the analysis.
+
+Respond with ONLY a JSON object — no prose:
+{"metrics": ["Founded", "HQ", ...],
+ "rows": [{"name": "...", "values": ["2022", "Sunnyvale", ...]}],
+ "sources": [{"entity": "...", "metric": "...", "value": "...", "url": "...", "date": "...", \
+"confidence": "High|Medium|Estimate"}]}"""
+
+
+def _fallback_benchmark(intent: Intent, analysis: AnalysisOutput) -> BenchmarkData:
+    """Deterministic E-2 data when shaping fails: a generic metric set, rows from sources."""
+    metrics = ["Overview", "Source"]
+    rows = [
+        BenchmarkRow(name=(s.title or s.url)[:60], values=["—", s.url])
+        for s in analysis.sources[:8]
+    ] or [BenchmarkRow(name="—", values=["—", "—"])]
+    return BenchmarkData(title=analysis.title, language=intent.language, metrics=metrics, rows=rows)
+
+
+def _shape_benchmark(
+    client: LocalLLMClient, intent: Intent, analysis: AnalysisOutput, *, use_thinking: bool
+) -> BenchmarkData:
+    """Shape an E-2 Benchmark Table from the analysis (fail-open to a deterministic table)."""
+    language = "German" if intent.language == Language.DE else "English"
+    data = _shape_json(
+        client,
+        _BENCHMARK_SYSTEM + f"\nWrite metric names in {language}.",
+        _analysis_block(analysis),
+        use_thinking=use_thinking,
+    )
+    if not data:
+        return _fallback_benchmark(intent, analysis)
+    metrics = [str(m).strip() for m in _as_list(data.get("metrics")) if str(m).strip()]
+    rows: list[BenchmarkRow] = []
+    for item in _as_list(data.get("rows")):
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            values = [str(v) for v in _as_list(item.get("values"))]
+            rows.append(BenchmarkRow(name=str(item["name"]).strip(), values=values))
+    sources: list[BenchmarkSource] = []
+    for item in _as_list(data.get("sources")):
+        if isinstance(item, dict):
+            sources.append(
+                BenchmarkSource(
+                    entity=str(item.get("entity") or ""),
+                    metric=str(item.get("metric") or ""),
+                    value=str(item.get("value") or ""),
+                    url=str(item.get("url") or ""),
+                    date=str(item.get("date") or ""),
+                    confidence=str(item.get("confidence") or ""),
+                )
+            )
+    if not metrics or not rows:
+        return _fallback_benchmark(intent, analysis)
+    return BenchmarkData(
+        title=analysis.title, language=intent.language, metrics=metrics, rows=rows, sources=sources
+    )
+
+
+# ---------------------------------------------------------------- E-3 Business Case shaping
+_CASE_SYSTEM = """You extract the financial drivers for a business-case model for Neura Robotics. \
+From the analysis, estimate the headline assumptions (flag them as estimates — they are inputs the \
+user will refine). Use realistic magnitudes consistent with the analysis; never invent precise \
+figures the analysis does not support.
+
+Respond with ONLY a JSON object — no prose (all amounts in EUR, rates as decimals e.g. 0.3 = 30%):
+{"investment": 2000000, "revenue_year1": 1500000, "revenue_growth": 0.3, "opex_year1": 900000, \
+"opex_growth": 0.15, "discount_rate": 0.12, "years": 3,
+ "assumptions": [{"name": "Market size", "value": 500000000, "unit": "EUR", "source": "...", \
+"confidence": "Estimate"}], "bottom_line": "2-sentence recommendation"}"""
+
+
+def _shape_business_case(
+    client: LocalLLMClient, intent: Intent, analysis: AnalysisOutput, *, use_thinking: bool
+) -> BusinessCaseData:
+    """Shape an E-3 Business Case model from the analysis (fail-open to neutral defaults)."""
+    language = "German" if intent.language == Language.DE else "English"
+    base = BusinessCaseData(
+        title=analysis.title, language=intent.language, bottom_line=analysis.bottom_line[:300]
+    )
+    data = _shape_json(
+        client,
+        _CASE_SYSTEM + f"\nWrite assumption names + bottom_line in {language}.",
+        _analysis_block(analysis),
+        use_thinking=use_thinking,
+    )
+    if not data:
+        return base
+    assumptions: list[CaseAssumption] = []
+    for item in _as_list(data.get("assumptions")):
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            assumptions.append(
+                CaseAssumption(
+                    name=str(item["name"]).strip(),
+                    value=_coerce_float(item.get("value")),
+                    unit=str(item.get("unit") or ""),
+                    source=str(item.get("source") or ""),
+                    confidence=str(item.get("confidence") or ""),
+                )
+            )
+    years = int(_coerce_float(data.get("years"), 3)) or 3
+    return BusinessCaseData(
+        title=analysis.title,
+        language=intent.language,
+        years=max(1, min(5, years)),
+        investment=_coerce_float(data.get("investment")),
+        revenue_year1=_coerce_float(data.get("revenue_year1")),
+        revenue_growth=_coerce_float(data.get("revenue_growth"), 0.3),
+        opex_year1=_coerce_float(data.get("opex_year1")),
+        opex_growth=_coerce_float(data.get("opex_growth"), 0.15),
+        discount_rate=_coerce_float(data.get("discount_rate"), 0.12),
+        assumptions=assumptions,
+        bottom_line=str(data.get("bottom_line") or analysis.bottom_line)[:300],
+    )
+
+
+# ---------------------------------------------------------------- E-4 Tracker shaping
+_TRACKER_SYSTEM = """You build a pipeline/initiative tracker for Neura Robotics. From the \
+analysis, list the items to track (companies/options/initiatives) with a category and a sensible \
+starting status/priority.
+
+Respond with ONLY a JSON object — no prose:
+{"items": [{"name": "...", "category": "...", "status": "Active|On Hold|Completed|Dropped", \
+"priority": "High|Medium|Low", "owner": "", "next_step": "...", "notes": "..."}]}"""
+
+
+def _fallback_tracker(intent: Intent, analysis: AnalysisOutput) -> TrackerData:
+    """Deterministic E-4 data when shaping fails: one item per source/section."""
+    names: list[str] = [s.title or s.url for s in analysis.sources if (s.title or s.url)]
+    if not names:
+        names = [section.heading for section in analysis.sections]
+    items = [TrackerItem(name=name[:60]) for name in names[:20]]
+    return TrackerData(title=analysis.title, language=intent.language, items=items)
+
+
+def _shape_tracker(
+    client: LocalLLMClient, intent: Intent, analysis: AnalysisOutput, *, use_thinking: bool
+) -> TrackerData:
+    """Shape an E-4 Tracker from the analysis (fail-open to a deterministic tracker)."""
+    language = "German" if intent.language == Language.DE else "English"
+    data = _shape_json(
+        client,
+        _TRACKER_SYSTEM + f"\nWrite item text in {language}.",
+        _analysis_block(analysis),
+        use_thinking=use_thinking,
+    )
+    if not data:
+        return _fallback_tracker(intent, analysis)
+    items: list[TrackerItem] = []
+    for item in _as_list(data.get("items")):
+        if isinstance(item, dict) and str(item.get("name", "")).strip():
+            items.append(
+                TrackerItem(
+                    name=str(item["name"]).strip(),
+                    category=str(item.get("category") or ""),
+                    status=str(item.get("status") or "Active"),
+                    priority=str(item.get("priority") or "Medium"),
+                    owner=str(item.get("owner") or ""),
+                    next_step=str(item.get("next_step") or ""),
+                    notes=str(item.get("notes") or ""),
+                )
+            )
+    if not items:
+        return _fallback_tracker(intent, analysis)
+    return TrackerData(title=analysis.title, language=intent.language, items=items)
+
+
+def shape_workbook(
+    client: LocalLLMClient,
+    intent: Intent,
+    analysis: AnalysisOutput,
+    *,
+    template: ExcelTemplate | None = None,
+    use_thinking: bool = True,
+) -> tuple[ExcelTemplate, WorkbookData]:
+    """Shape the analysis into typed Excel data for the routed template (one LLM call, fail-open).
+
+    Routes the task type to its Excel template (E-1..E-4, SPEC §12) unless ``template`` is given,
+    then extracts the typed structured data via one shaping call. Every path falls back to a
+    deterministic builder so a bad LLM/parse never blocks delivery (SPEC REQ-5). Returns the
+    resolved template + its data, ready for the matching ``core.excel_builder`` function.
+    """
+    resolved = template or workbook_template_for(intent.task_type)
+    if resolved == ExcelTemplate.BENCHMARK_TABLE:
+        return resolved, _shape_benchmark(client, intent, analysis, use_thinking=use_thinking)
+    if resolved == ExcelTemplate.BUSINESS_CASE_MODEL:
+        return resolved, _shape_business_case(client, intent, analysis, use_thinking=use_thinking)
+    if resolved == ExcelTemplate.TRACKER_DASHBOARD:
+        return resolved, _shape_tracker(client, intent, analysis, use_thinking=use_thinking)
+    return resolved, _shape_matrix(client, intent, analysis, use_thinking=use_thinking)

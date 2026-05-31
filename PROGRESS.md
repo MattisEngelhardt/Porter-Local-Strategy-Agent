@@ -614,7 +614,8 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 [x] 7. excel_builder E-3 Business Case 5-tab model (Summary NPV/IRR formulas, Assumptions all
        yellow, Projections/Scenarios formula-linked, Sources audit) — N-10 verified (done 2026-05-31
        — 169 green; data_only re-open returns None for NPV → pure formulas)
-[ ] 8. `content_shaper.shape_workbook` (per-template structured data via LLM + fail-open fallback)
+[x] 8. `content_shaper.shape_workbook` (task-type→template routing E-1..E-4 + per-template
+       structured LLM shaping + deterministic fail-open fallbacks) (done 2026-05-31 — 176 green)
 [ ] 9. Pipeline wiring: generalize `_render_outputs` (3 formats + shaping); render in research path
        too; business-case dual output (N-6); `render_result` "Phase 4" cleanup
 [ ] 10. Quality gate (ruff + mypy --strict + pytest) + live runs + PROGRESS/README + push
