@@ -589,3 +589,51 @@ LOW + HIGH live-verified. CEO-office document-preparation mode: routing + ambigu
 read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** — live-verified
 (6-slide deck from a Q2 xlsx, no hallucination). PDF needs WeasyPrint GTK runtime (fail-fast).)
 ---
+
+## PHASE 4 — Output Generation (All Three Types)
+**Executed by**: Opus (claude-opus-4-8)
+**Date**: 2026-05-31
+**Session status**: IN PROGRESS
+
+### Phase Plan (10 atomic tasks; 1 commit each `phase-4: …`; PROGRESS updated per task)
+[x] 0. Baseline 141 green (RULE 11); installed jinja2 into venv; logo set up (done 2026-05-31)
+[x] 1. `assets/neura_logo.png` in place (user-provided, copied to SPEC §7 name). PDF live blocked
+       on GTK (see below) — PDF code built code-complete + fail-fast instead (done 2026-05-31)
+[x] 2. Brief templates T-1..T-6 (Jinja2 HTML) + `exporter.render_brief_html`/`build_brief_pdf`
+       (task-type→template, logo, bilingual, GTK bootstrap) + 5 tests (done 2026-05-31 — 146 green)
+[ ] 3. Generalized `exporter.build_deck` — all 10 slide types (Neura colors, logo bottom-right)
+[ ] 4. `core/content_shaper.py` `shape_deck` (slide selection per task type; SCR business case) + fallback
+[ ] 5. `core/excel_builder.py` E-1 Decision Matrix (weights yellow, SUMPRODUCT/RANK, cond-fmt)
+[ ] 6. excel_builder E-2 Benchmark (table+auto-filter+Sources) + E-4 Tracker (data-validation)
+[ ] 7. excel_builder E-3 Business Case 5-tab model (NPV/IRR/payback, formula integrity N-10)
+[ ] 8. `content_shaper.shape_workbook` (per-template structured data via LLM + fail-open fallback)
+[ ] 9. Pipeline wiring: generalize `_render_outputs` (3 formats + shaping); render in research path
+       too; business-case dual output (N-6); `render_result` "Phase 4" cleanup
+[ ] 10. Quality gate (ruff + mypy --strict + pytest) + live runs + PROGRESS/README + push
+
+### Key Technical Decisions (Phase 4)
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Excel/deck content shaping | New `core/content_shaper.py`: one structured LLM call per deliverable → typed JSON (entities/criteria/weights/scores; assumptions) | Prose `AnalysisOutput` lacks the numeric per-entity data Excel needs; shaping yields genuinely-populated matrices with **real formulas** (meets gate). Fail-open deterministic fallbacks. User-approved. |
+| Briefs render path | Jinja2 **HTML** templates → WeasyPrint (not Markdown→HTML) | SPEC §4.6 says "Markdown→weasyprint" but WeasyPrint consumes HTML and no Markdown lib is in SPEC §6 (RULE 3). HTML templates + shared Neura CSS is the clean local path. |
+| Deck renderer | One generalized `build_deck(DeckStructure)` over the 10 slide types (not per-type `templates/decks/*.py`) | User guidance "extend exporter.py, don't duplicate". Avoids 4 near-duplicate builders; content selection lives in the shaper. |
+| GTK on Windows | `_ensure_gtk_dll_dir` forces a found GTK `bin` ahead of any incompatible libgobject on PATH (e.g. Tesseract) + `OutputConfig.gtk_runtime_path` | Tesseract ships a broken libgobject earlier on PATH; this makes WeasyPrint load the right libs once a real GTK runtime is installed — zero code change. |
+| Logo | User-provided `Neura Robotics Logo.png` copied to `assets/neura_logo.png` (SPEC §7 / config path) | Real brand asset; config-driven; existing `include_logo and is_file()` guard already handles absence. |
+
+### Carry-over from Phase 3.5
+- **Playbook reviews (RULE 14):** `deep_research_playbook.md` + `doc_prep_playbook.md` — user
+  **approved as-is** this session (kept unchanged).
+- **PDF live / GTK:** WeasyPrint still cannot load GTK in the venv — the Tesseract folder ships an
+  incompatible `libgobject-2.0-0.dll` earlier on PATH and **no real GTK3 runtime is installed**.
+  Auto-install was attempted but the download is blocked from the agent shell (GitHub 404/empty) and
+  a GTK install needs admin. **Resolution:** PDF code is complete + unit-tested (HTML render) +
+  fail-fast with exact instructions, and `_ensure_gtk_dll_dir` will pick up a GTK runtime the moment
+  one is installed. **User action to go live:** install the GTK3 runtime (e.g. tschoonj
+  `gtk3-runtime-*-win64.exe`, enable "set up PATH"), reopen the terminal — then PDF renders with no
+  code change. PPTX + Excel are fully local (no GTK).
+
+### Tests Status (running)
+- After Task 2: **146 passed** (141 prior + 5 brief). ruff + `mypy --strict` (27 files) clean.
+
+### PHASE 4 STATUS: ⏳ IN PROGRESS
+---
