@@ -11,6 +11,12 @@ __pycache__/
 # Agent brain — local only, may contain confidential Neura context (SPEC N-9)
 brain.md
 
+# Personal planning / spec / workflow docs — local only, never publish
+strategy_agent_SPEC.md
+opus_WORKFLOW.md
+PHASE_3.5_PLAN.md
+PHASE_4_KICKOFF.md
+
 # Generated outputs (keep the directory, ignore its contents)
 output/*
 !output/.gitkeep
