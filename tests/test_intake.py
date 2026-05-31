@@ -82,8 +82,25 @@ def test_render_result_shows_analysis_structure() -> None:
     assert "Acquire OneX now." in out
     assert "Technology" in out
     assert "reuters.com" in out
-    assert "Would generate" in out
+    assert "Routed" in out  # no files attached → routed (not "Generated")
     assert "excel" in out
+
+
+def test_render_result_shows_generated_files() -> None:
+    """When deliverables were rendered, render_result lists the file paths as Generated."""
+    console = _capture_console()
+    result = PipelineResult(
+        intent=_intent(),
+        routed_formats=[OutputFormat.BRIEF],
+        analysis=AnalysisOutput(
+            title="OneX Brief", language=Language.EN, bottom_line="Acquire now."
+        ),
+        output_files=[Path("output/2026-05-31_onex_brief.pdf")],
+    )
+    render_result(console, result, "cyan")
+    out = console.file.getvalue()  # type: ignore[attr-defined]
+    assert "Generated" in out
+    assert "onex_brief.pdf" in out
 
 
 def test_render_result_shows_effort_telemetry() -> None:

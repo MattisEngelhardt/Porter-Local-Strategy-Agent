@@ -29,6 +29,7 @@ from models.workbook import (
     BenchmarkData,
     BusinessCaseData,
     DecisionMatrixData,
+    ExcelTemplate,
     TrackerData,
 )
 
@@ -886,3 +887,26 @@ def build_business_case(data: BusinessCaseData, config: AppConfig, output_dir: s
     path = out / f"{date.today().isoformat()}_{_slug(data.title)}_business_case.xlsx"
     wb.save(str(path))
     return path
+
+
+# --------------------------------------------------------------- dispatcher
+def build_workbook(
+    template: ExcelTemplate,
+    data: DecisionMatrixData | BenchmarkData | BusinessCaseData | TrackerData,
+    config: AppConfig,
+    output_dir: str | Path,
+) -> Path:
+    """Render the shaped ``(template, data)`` pair into its .xlsx (dispatches to E-1..E-4).
+
+    The ``data`` type matches ``template`` (both come from ``content_shaper.shape_workbook``);
+    a mismatch is a programming error and raises :class:`ExcelBuildError`.
+    """
+    if template == ExcelTemplate.BENCHMARK_TABLE and isinstance(data, BenchmarkData):
+        return build_benchmark_table(data, config, output_dir)
+    if template == ExcelTemplate.BUSINESS_CASE_MODEL and isinstance(data, BusinessCaseData):
+        return build_business_case(data, config, output_dir)
+    if template == ExcelTemplate.TRACKER_DASHBOARD and isinstance(data, TrackerData):
+        return build_tracker(data, config, output_dir)
+    if template == ExcelTemplate.DECISION_MATRIX and isinstance(data, DecisionMatrixData):
+        return build_decision_matrix(data, config, output_dir)
+    raise ExcelBuildError(f"Workbook data type {type(data).__name__} does not match {template}.")

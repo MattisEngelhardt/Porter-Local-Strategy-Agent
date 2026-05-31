@@ -8,7 +8,7 @@ Voice input (Ctrl+Space) remains a Phase 5 TODO.
 
 This module is the REPL's presentation layer: :class:`ReplInteraction` is the rich
 implementation of the pipeline's ``Interaction`` protocol, and ``render_result`` displays a
-:class:`PipelineResult` (no file rendering — that is Phase 4).
+:class:`PipelineResult` including the rendered deliverable paths (PDF / PPTX / Excel).
 """
 
 from __future__ import annotations
@@ -150,7 +150,7 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
     if result.output_files:
         plan = f"Generated: [bold]{formats}[/bold]"
     else:
-        plan = f"Would generate: [bold]{formats}[/bold]  [dim](file rendering is Phase 4)[/dim]"
+        plan = f"Routed: [bold]{formats}[/bold]  [dim](no files written — see notes above)[/dim]"
     console.print(Panel(plan, title="output plan", border_style=accent))
     if result.artifact_path is not None or result.output_files:
         lines = []
@@ -159,9 +159,7 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
                 lines.append(f"📄 [bold]{file}[/bold]")
         if result.artifact_path is not None:
             lines.append(f"[dim]blueprint (.md cheat-sheet): {result.artifact_path}[/dim]")
-        console.print(
-            Panel("\n".join(lines), title="management briefing written", border_style=accent)
-        )
+        console.print(Panel("\n".join(lines), title="deliverables written", border_style=accent))
     console.print(Panel(_telemetry_text(result), title="run telemetry", border_style="dim"))
 
 

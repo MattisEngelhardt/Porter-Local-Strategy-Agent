@@ -6,6 +6,7 @@ fake async stub, so the full advanced loop runs offline and deterministically.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from core.config import AppConfig
@@ -114,8 +115,15 @@ def _intent(**kw: Any) -> Intent:
     return Intent(**base)
 
 
+def _config(tmp_path: Path) -> AppConfig:
+    """An AppConfig whose deliverables are written under ``tmp_path`` (never pollute ./output)."""
+    config = AppConfig()
+    config.output.output_dir = str(tmp_path)
+    return config
+
+
 # ----------------------------------------------------------------- full run
-def test_run_pipeline_full_analysis() -> None:
+def test_run_pipeline_full_analysis(tmp_path: Path) -> None:
     """A confirmed run researches via the manager, synthesizes, critiques, and reports telemetry."""
     client = _ScriptedClient(
         intent='{"task_type":"competitor_analysis","depth":"standard","audience":"strategy_team","summary":"Analyze 1X"}',  # noqa: E501
@@ -125,7 +133,7 @@ def test_run_pipeline_full_analysis() -> None:
     manager = _FakeManager(_report())
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="Analyze 1X Technologies"),
         AutoInteraction(),
         manager=manager,  # type: ignore[arg-type]
@@ -144,8 +152,8 @@ def test_run_pipeline_full_analysis() -> None:
     assert result.revisions == 0
 
 
-def test_run_pipeline_business_case_dual_output() -> None:
-    """A business case routes to the dual Deck + Excel output and still synthesizes."""
+def test_run_pipeline_business_case_dual_output(tmp_path: Path) -> None:
+    """A business case routes to Deck + Excel AND renders both files in one run (N-6)."""
     client = _ScriptedClient(
         intent='{"task_type":"business_case","depth":"deep","audience":"ceo_board","summary":"Japan BC"}',  # noqa: E501
         subqueries='["japan market size", "japan robotics demand"]',
@@ -153,7 +161,7 @@ def test_run_pipeline_business_case_dual_output() -> None:
     )
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="Business case for Japan expansion: market size, investment, ROI"),
         AutoInteraction(),
         manager=_FakeManager(_report()),  # type: ignore[arg-type]
@@ -161,6 +169,10 @@ def test_run_pipeline_business_case_dual_output() -> None:
     assert result.routed_formats == [OutputFormat.DECK, OutputFormat.EXCEL]
     assert result.analysis is not None
     assert result.effort == EffortLevel.HIGH  # business_case floors at HIGH
+    # N-6: both deliverables generated in one run (shaping falls back deterministically offline).
+    suffixes = sorted(p.suffix for p in result.output_files)
+    assert suffixes == [".pptx", ".xlsx"]
+    assert all(p.exists() for p in result.output_files)
 
 
 def test_run_pipeline_decline_gives_quick_answer() -> None:
@@ -184,7 +196,7 @@ def test_run_pipeline_decline_gives_quick_answer() -> None:
     assert manager.efforts == []  # research never ran
 
 
-def test_run_pipeline_preserves_german() -> None:
+def test_run_pipeline_preserves_german(tmp_path: Path) -> None:
     """German input → German intent and German analysis."""
     client = _ScriptedClient(
         intent='{"task_type":"market_analysis","depth":"standard","audience":"strategy_team","summary":"Markt"}',  # noqa: E501
@@ -193,7 +205,7 @@ def test_run_pipeline_preserves_german() -> None:
     )
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="Marktanalyse Humanoid Robotics für uns"),
         AutoInteraction(),
         manager=_FakeManager(_report()),  # type: ignore[arg-type]
@@ -203,7 +215,7 @@ def test_run_pipeline_preserves_german() -> None:
     assert result.analysis.language == Language.DE
 
 
-def test_run_pipeline_low_effort_caps_and_skips_critique() -> None:
+def test_run_pipeline_low_effort_caps_and_skips_critique(tmp_path: Path) -> None:
     """A low-effort task tightens clarifications AND skips the critic (effort master dial)."""
     client = _ScriptedClient(
         intent='{"task_type":"competitor_analysis","depth":"quick","audience":null,"summary":"x"}',
@@ -212,7 +224,7 @@ def test_run_pipeline_low_effort_caps_and_skips_critique() -> None:
     )
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="quick competitor overview of Figure AI"),
         AutoInteraction(),
         manager=_FakeManager(_report()),  # type: ignore[arg-type]
@@ -223,7 +235,7 @@ def test_run_pipeline_low_effort_caps_and_skips_critique() -> None:
     assert result.revisions == 0
 
 
-def test_run_pipeline_effort_override_wins() -> None:
+def test_run_pipeline_effort_override_wins(tmp_path: Path) -> None:
     """An explicit effort_override beats auto-detection (the manager runs at the override)."""
     client = _ScriptedClient(
         intent='{"task_type":"competitor_analysis","depth":"standard","audience":null,"summary":"x"}',
@@ -233,7 +245,7 @@ def test_run_pipeline_effort_override_wins() -> None:
     manager = _FakeManager(_report())
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="quick overview of Figure AI"),  # would auto-detect LOW
         AutoInteraction(),
         manager=manager,  # type: ignore[arg-type]
@@ -243,7 +255,7 @@ def test_run_pipeline_effort_override_wins() -> None:
     assert manager.efforts == [EffortLevel.ULTRA]
 
 
-def test_run_pipeline_critique_triggers_revision() -> None:
+def test_run_pipeline_critique_triggers_revision(tmp_path: Path) -> None:
     """A failing critique drives a bounded revision loop until it passes (evaluator-optimizer)."""
     fail = '{"score": 55, "criteria": [], "issues": ["add a second funding source"], "summary": "weak"}'  # noqa: E501
     client = _ScriptedClient(
@@ -254,7 +266,7 @@ def test_run_pipeline_critique_triggers_revision() -> None:
     )
     result = run_pipeline(
         client,  # type: ignore[arg-type]
-        AppConfig(),
+        _config(tmp_path),
         TaskRequest(raw_input="Analyze 1X Technologies"),  # HIGH effort → critique on, 1 revision
         AutoInteraction(),
         manager=_FakeManager(_report()),  # type: ignore[arg-type]

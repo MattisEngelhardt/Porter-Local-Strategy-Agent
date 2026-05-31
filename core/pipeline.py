@@ -10,8 +10,9 @@ Wires the master loop (SPEC §5.3 + §15.5):
     quality-check (deterministic floor) → PipelineResult (analysis + effort + critique + telemetry)
 
 Effort is the master dial: it sets every budget via ``config.effort.level_for(intent.effort)``.
-Advisory layers (workers / critic) are fail-open; hard deps (SearXNG all-fail, LLM down) keep the
-Phase-3 fail-fast policy. No output file is rendered (Phase 4); no ChromaDB memory (Phase 5).
+Advisory layers (workers / critic / renderers) are fail-open; hard deps (SearXNG all-fail, LLM down)
+keep the Phase-3 fail-fast policy. The routed deliverables (PDF brief / PPTX deck / Excel workbook,
+Phase 4) are rendered at the end via ``_render_outputs``; no ChromaDB memory yet (Phase 5).
 
 Interaction with the user is abstracted behind :class:`Interaction` so the chain is pure and
 testable: the REPL supplies a rich implementation (in ``core/intake.py``), CLI/tests supply the
@@ -26,6 +27,7 @@ from typing import Protocol
 
 from core.clarification import clarify
 from core.config import AppConfig, EffortLevelConfig
+from core.content_shaper import shape_deck, shape_workbook
 from core.critic import critique, revise
 from core.doc_synthesis import (
     propose_doc_questions,
@@ -33,7 +35,8 @@ from core.doc_synthesis import (
     to_management_markdown,
     write_briefing_md,
 )
-from core.exporter import ExportError, build_management_deck, build_management_pdf
+from core.excel_builder import ExcelBuildError, build_workbook
+from core.exporter import ExportError, build_brief_pdf, build_deck
 from core.intent_parser import classify_work_mode, parse_intent
 from core.json_utils import extract_json_array
 from core.memory import load_brain
@@ -305,18 +308,40 @@ def _resolve_doc_mode(task_text: str, interaction: Interaction, language: Langua
 
 
 def _render_outputs(
-    config: AppConfig, intent: Intent, analysis: AnalysisOutput, interaction: Interaction
+    client: LocalLLMClient,
+    config: AppConfig,
+    intent: Intent,
+    analysis: AnalysisOutput,
+    interaction: Interaction,
+    effort_cfg: EffortLevelConfig,
 ) -> list[Path]:
-    """Render the routed deliverables (PDF for brief, PPTX for deck). Fail-open per renderer.
+    """Render all routed deliverables (PDF brief, PPTX deck, Excel). Fail-open per renderer.
 
-    A renderer failure (e.g. WeasyPrint's GTK runtime missing) never loses the briefing — it is
-    reported via ``notify`` and the other outputs (and the .md blueprint) still ship.
+    Decks and Excel are shaped from the prose analysis by ``content_shaper`` (one LLM call each)
+    before rendering. A renderer failure (e.g. WeasyPrint's GTK runtime missing, or a shaping/build
+    error) never loses the analysis — it is reported via ``notify`` and the other outputs still ship
+    (SPEC REQ-5). Business Case routes to Deck + Excel together (N-6, already in output_formats).
     """
     files: list[Path] = []
     out_dir = config.output.output_dir
+    think = effort_cfg.thinking
+
+    if OutputFormat.BRIEF in intent.output_formats:
+        try:
+            pdf = build_brief_pdf(
+                analysis, config, out_dir, task_type=intent.task_type, audience=intent.audience
+            )
+            files.append(pdf)
+            interaction.notify(_t(intent.language, f"PDF erstellt: {pdf}", f"PDF created: {pdf}"))
+        except ExportError as exc:
+            interaction.notify(
+                _t(intent.language, f"PDF übersprungen: {exc}", f"PDF skipped: {exc}")
+            )
+
     if OutputFormat.DECK in intent.output_formats:
         try:
-            deck = build_management_deck(analysis, config, out_dir, intent.language)
+            deck_structure = shape_deck(client, intent, analysis, use_thinking=think)
+            deck = build_deck(deck_structure, config, out_dir)
             files.append(deck)
             interaction.notify(
                 _t(intent.language, f"Deck erstellt: {deck}", f"Deck created: {deck}")
@@ -325,14 +350,18 @@ def _render_outputs(
             interaction.notify(
                 _t(intent.language, f"PPTX übersprungen: {exc}", f"PPTX skipped: {exc}")
             )
-    if OutputFormat.BRIEF in intent.output_formats:
+
+    if OutputFormat.EXCEL in intent.output_formats:
         try:
-            pdf = build_management_pdf(analysis, config, out_dir, intent.language)
-            files.append(pdf)
-            interaction.notify(_t(intent.language, f"PDF erstellt: {pdf}", f"PDF created: {pdf}"))
-        except ExportError as exc:
+            template, data = shape_workbook(client, intent, analysis, use_thinking=think)
+            workbook = build_workbook(template, data, config, out_dir)
+            files.append(workbook)
             interaction.notify(
-                _t(intent.language, f"PDF übersprungen: {exc}", f"PDF skipped: {exc}")
+                _t(intent.language, f"Excel erstellt: {workbook}", f"Excel created: {workbook}")
+            )
+        except ExcelBuildError as exc:
+            interaction.notify(
+                _t(intent.language, f"Excel übersprungen: {exc}", f"Excel skipped: {exc}")
             )
     return files
 
@@ -381,7 +410,7 @@ def _run_document_prep(
     interaction.notify(
         _t(intent.language, f"Blueprint geschrieben: {path}", f"Blueprint written: {path}")
     )
-    output_files = _render_outputs(config, intent, analysis, interaction)
+    output_files = _render_outputs(client, config, intent, analysis, interaction, effort_cfg)
     return PipelineResult(
         intent=intent,
         routed_formats=intent.output_formats,
@@ -485,6 +514,9 @@ def run_pipeline(
             )
         )
 
+    # Render the routed deliverables (PDF / PPTX / Excel) — Business Case = Deck + Excel (N-6).
+    output_files = _render_outputs(client, config, intent, analysis, interaction, effort_cfg)
+
     return PipelineResult(
         intent=intent,
         routed_formats=intent.output_formats,
@@ -495,4 +527,5 @@ def run_pipeline(
         critique=crit,
         revisions=revisions,
         research_report=report,
+        output_files=output_files,
     )
