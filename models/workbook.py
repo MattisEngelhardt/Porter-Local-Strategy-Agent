@@ -43,3 +43,29 @@ class WorkbookContent(BaseModel):
     title: str
     language: Language
     sheets: list[SheetDefinition] = Field(default_factory=list)
+
+
+# --- Phase 4: structured per-template content (populated by core.content_shaper) ----------
+class ScoringCriterion(BaseModel):
+    """One weighted criterion of a decision/scoring matrix (E-1)."""
+
+    name: str
+    weight: float = Field(ge=0.0)  # relative weight; normalized to sum to 1 by the builder
+    definition: str = ""  # how to score 1 (worst) .. 5 (best) — for the Criteria guide tab
+
+
+class EntityScores(BaseModel):
+    """One scored entity (company/option/partner) in a decision matrix (E-1)."""
+
+    name: str
+    scores: list[int] = Field(default_factory=list)  # one 1-5 score per criterion (in order)
+    notes: list[str] = Field(default_factory=list)  # evidence per criterion (Research Notes tab)
+
+
+class DecisionMatrixData(BaseModel):
+    """Structured input for the E-1 Decision/Scoring Matrix (weighted SUMPRODUCT + RANK)."""
+
+    title: str
+    language: Language
+    criteria: list[ScoringCriterion] = Field(default_factory=list)
+    entities: list[EntityScores] = Field(default_factory=list)

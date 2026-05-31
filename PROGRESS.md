@@ -601,9 +601,13 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
        on GTK (see below) — PDF code built code-complete + fail-fast instead (done 2026-05-31)
 [x] 2. Brief templates T-1..T-6 (Jinja2 HTML) + `exporter.render_brief_html`/`build_brief_pdf`
        (task-type→template, logo, bilingual, GTK bootstrap) + 5 tests (done 2026-05-31 — 146 green)
-[ ] 3. Generalized `exporter.build_deck` — all 10 slide types (Neura colors, logo bottom-right)
-[ ] 4. `core/content_shaper.py` `shape_deck` (slide selection per task type; SCR business case) + fallback
-[ ] 5. `core/excel_builder.py` E-1 Decision Matrix (weights yellow, SUMPRODUCT/RANK, cond-fmt)
+[x] 3. Generalized `exporter.build_deck` — all 10 slide types (Neura colors, logo bottom-right)
+       (done 2026-05-31 — 148 green; `_DeckRenderer` + back-compat `build_management_deck`)
+[x] 4. `core/content_shaper.py` `shape_deck` (slide selection per task type; SCR business case) +
+       deterministic fallback (done 2026-05-31 — 153 green)
+[x] 5. `core/excel_builder.py` E-1 Decision Matrix (weights yellow, SUMPRODUCT/RANK, cond-fmt,
+       Criteria_Guide + Research_Notes tabs) (done 2026-05-31 — 160 green; N-10 verified: data_only
+       re-open returns None → pure formulas)
 [ ] 6. excel_builder E-2 Benchmark (table+auto-filter+Sources) + E-4 Tracker (data-validation)
 [ ] 7. excel_builder E-3 Business Case 5-tab model (NPV/IRR/payback, formula integrity N-10)
 [ ] 8. `content_shaper.shape_workbook` (per-template structured data via LLM + fail-open fallback)
@@ -633,7 +637,8 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
   code change. PPTX + Excel are fully local (no GTK).
 
 ### Tests Status (running)
-- After Task 2: **146 passed** (141 prior + 5 brief). ruff + `mypy --strict` (27 files) clean.
+- Task 2: **146 passed** (+5 brief). Task 3: **148** (+2 deck). Task 4: **153** (+5 shape_deck).
+  Task 5: **160** (+7 E-1 Excel). ruff + `mypy --strict` clean (29 files after Task 5).
 
 ### PHASE 4 STATUS: ⏳ IN PROGRESS
 ---

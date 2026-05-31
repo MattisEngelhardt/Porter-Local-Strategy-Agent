@@ -38,6 +38,8 @@ module = [
     "pandas",
     "pptx",
     "pptx.*",
+    "openpyxl",
+    "openpyxl.*",
     "weasyprint",
 ]
 ignore_missing_imports = true
