@@ -11,10 +11,12 @@ from core.exporter import (
     PdfBuildError,
     brief_template_for,
     build_brief_pdf,
+    build_deck,
     build_management_deck,
     build_management_pdf,
     render_brief_html,
 )
+from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import Language, TaskType
 
@@ -154,3 +156,83 @@ def test_build_brief_pdf_failfast_or_renders(tmp_path: Path) -> None:
     else:
         with pytest.raises(PdfBuildError):
             build_brief_pdf(_analysis(), AppConfig(), tmp_path, task_type=TaskType.ADHOC)
+
+
+# ----------------------------------------------------------------- deck (all 10 slide types)
+def _full_deck() -> DeckStructure:
+    return DeckStructure(
+        title="Neura Q2 Board",
+        language=Language.EN,
+        slides=[
+            SlideContent(
+                slide_type=SlideType.TITLE, headline="Neura Board Update Q2", body="Board"
+            ),
+            SlideContent(
+                slide_type=SlideType.EXECUTIVE_SUMMARY,
+                headline="Runway is 9 months",
+                bullets=["Cash 10.8M", "Burn 1.2M/mo"],
+            ),
+            SlideContent(slide_type=SlideType.MARKET_LANDSCAPE, headline="Rivals closing in"),
+            SlideContent(slide_type=SlideType.COMPANY_DEEP_DIVE, headline="Figure scaling"),
+            SlideContent(slide_type=SlideType.FINANCIAL_OVERVIEW, headline="Funding up"),
+            SlideContent(
+                slide_type=SlideType.COMPETITIVE_COMPARISON,
+                headline="Neura leads on cognition",
+                table=[["Company", "Funding"], ["Neura", "120M"], ["Figure", "675M"]],
+            ),
+            SlideContent(slide_type=SlideType.STRATEGIC_SIGNALS, headline="Hiring signals push"),
+            SlideContent(
+                slide_type=SlideType.SWOT,
+                headline="Strong tech, thin capital",
+                table=[
+                    ["Strengths", "Cognitive AI; Bosch"],
+                    ["Weaknesses", "Less capital"],
+                    ["Opportunities", "EU industrial"],
+                    ["Threats", "US scale"],
+                ],
+            ),
+            SlideContent(
+                slide_type=SlideType.RECOMMENDATION,
+                headline="Approve the bridge round now",
+                body="GO — raise €80M bridge",
+                bullets=["Extends runway 18mo"],
+            ),
+            SlideContent(
+                slide_type=SlideType.APPENDIX, headline="Sources", bullets=["reuters.com/x"]
+            ),
+        ],
+    )
+
+
+def test_build_deck_all_slide_types_with_logo(tmp_path: Path) -> None:
+    """build_deck renders all 10 slide types, one slide each, with the logo bottom-right."""
+    pptx = pytest.importorskip("pptx")
+    path = build_deck(_full_deck(), AppConfig(), tmp_path)
+    assert path.exists() and path.suffix == ".pptx"
+
+    prs = pptx.Presentation(str(path))
+    assert len(prs.slides) == 10
+    # Logo (a picture, shape_type == 13) appears on every slide (SPEC §11).
+    for slide in prs.slides:
+        assert any(shape.shape_type == 13 for shape in slide.shapes)
+    # The "so what" recommendation headline and its decision callout are present.
+    all_text = " ".join(
+        shape.text_frame.text
+        for slide in prs.slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    )
+    assert "Approve the bridge round now" in all_text
+    assert "GO — raise" in all_text
+    # The comparison table cells made it into the deck.
+    assert "Cognitive AI" in all_text  # SWOT quadrant content
+
+
+def test_build_deck_no_logo_when_disabled(tmp_path: Path) -> None:
+    """With include_logo off, no picture is added (the bottom-right logo is config-gated)."""
+    pptx = pytest.importorskip("pptx")
+    config = AppConfig()
+    config.output.include_logo = False
+    path = build_deck(_full_deck(), config, tmp_path)
+    prs = pptx.Presentation(str(path))
+    assert all(all(shape.shape_type != 13 for shape in slide.shapes) for slide in prs.slides)
