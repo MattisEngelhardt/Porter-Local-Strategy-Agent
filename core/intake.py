@@ -200,7 +200,7 @@ def run_repl(
 
     console.print(
         Panel(
-            f"[bold]Strategy Agent[/bold]\n"
+            f"[bold]Porter[/bold] — your local strategy agent\n"
             f"model: [bold]{client.model_name}[/bold]   backend: {client.backend_url}\n"
             "Type a task — the agent plans, researches (multi-agent), and produces a structured "
             "analysis.\n"
