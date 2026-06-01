@@ -1,22 +1,31 @@
-# Strategy Agent
+# Porter — local Strategy Agent
 
-A 100% local AI research/strategy agent turning research-heavy tasks into professional
-**PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on your
-machine with no external AI APIs, ever.
+**Porter** is a 100% local AI research/strategy agent that turns research-heavy tasks into
+professional **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on
+your machine with no external AI APIs, ever. Type `porter` in your terminal to start chatting.
 
-> **Status: Phase 4 (Output Generation) complete.** The agent now turns its analysis into the
-> three real deliverables — a **PDF brief** (Jinja2 → WeasyPrint, templates T-1..T-6), a
-> **Neura-styled PPTX deck** (python-pptx, all 10 slide types, logo bottom-right), and an **Excel
-> workbook** (openpyxl, 4 templates: Decision Matrix · Benchmark · Business-Case model · Tracker).
-> Excel workbooks are **formula-driven** — change a yellow input cell and weighted scores, ranks,
-> NPV/IRR and projections recalculate in MS Excel (no hardcoded intermediates). A **business case**
-> emits a deck **and** a financial model in one run. Rendering is wired into both the research and
-> the CEO-office document-prep paths and is **fail-open** (a renderer failure never loses the
-> analysis). Built on the Phase-3.5 loop: one **effort dial** (`low` / `high` / `ultra`,
-> auto-detected and overridable) drives a multi-agent **research manager** (N parallel workers,
-> source + date + confidence on every fact), **mid-research** clarification, and an **output
-> critic** + **revision** loop. Memory (ChromaDB) and voice land in Phase 5. See `PROGRESS.md` for
-> live status and `strategy_agent_SPEC.md` (incl. §15.5) for the full specification.
+> **Status: Phase 5 (Memory + Voice + Polish) complete — the project is finished.** The agent is
+> production-ready end-to-end: it understands a task (text **or voice**), asks at most a couple of
+> clarifying questions, runs multi-agent web research, reasons with persistent Neura context, and
+> renders the three real deliverables. New in Phase 5:
+> - **Persistent memory (ChromaDB + `nomic-embed-text`, fully local):** every run's analysis is
+>   embedded and stored; before each new run the agent retrieves relevant prior findings and, on a
+>   **second run about the same entity, shows a bilingual delta** — *"Since our last analysis of X
+>   (date, N weeks ago): …what changed."*
+> - **Brain-update flow:** after a run the agent proposes durable, high-signal additions to
+>   `brain.md`; you confirm `[y/N]` before anything is written.
+> - **Voice input (local):** press **Ctrl+Space** (or type `/voice`) to dictate — pyaudio captures,
+>   faster-whisper transcribes locally (DE/EN auto-detect), and the transcript lands in the prompt.
+> - **`porter` launcher:** one word in PowerShell starts the agent.
+>
+> Earlier phases still apply: a **PDF brief** (Jinja2 → WeasyPrint, T-1..T-6), a **Neura-styled
+> PPTX deck** (python-pptx, all 10 slide types, logo bottom-right), and a **formula-driven Excel
+> workbook** (openpyxl, 4 templates — change a yellow input and scores/ranks/NPV/IRR recalculate).
+> A **business case** emits a deck **and** a financial model in one run. One **effort dial**
+> (`low`/`high`/`ultra`, auto-detected and overridable) drives a multi-agent **research manager**,
+> **mid-research** clarification, and an **output critic + revision** loop. Memory and voice are
+> **advisory / fail-open** — if a dependency is missing the agent prints the exact fix and still
+> delivers. See `PROGRESS.md` for the full build log.
 >
 > **PDF note (Windows):** PPTX + Excel are fully local and work out of the box. PDF briefs use
 > WeasyPrint, which needs the **GTK/Pango runtime** on Windows — install it once via MSYS2 (see
@@ -29,9 +38,11 @@ machine with no external AI APIs, ever.
 ## Prerequisites
 
 - **Python 3.11+** (developed on 3.12).
-- **[Ollama](https://ollama.com/download)** running locally, with the default model pulled:
+- **[Ollama](https://ollama.com/download)** running locally, with the default model + the
+  embedding model pulled:
   ```bash
-  ollama pull gemma4:e4b
+  ollama pull gemma4:e4b        # reasoning model
+  ollama pull nomic-embed-text  # embeddings for persistent memory (CPU, no VRAM use)
   ```
 - **[Docker Desktop](https://docker.com)** — needed for the `research` command (SearXNG web
   search). The VS Code Docker extension is **not** enough; install the actual Docker Desktop app.
@@ -54,6 +65,10 @@ pip install aiohttp trafilatura diskcache pdfplumber pytesseract Pillow pandas o
 
 # 3. Install Phase 4 output dependencies (PPTX/Excel work immediately; PDF needs GTK — see below)
 pip install python-pptx openpyxl xlsxwriter jinja2 weasyprint
+
+# 4. Install Phase 5 dependencies — memory (always-on) + voice (optional)
+pip install chromadb                       # persistent memory (local vector store)
+pip install faster-whisper pyaudio pynput  # voice input (only needed if you enable voice)
 ```
 
 `requirements.txt` lists the **full** dependency set for all phases. The heavier
@@ -112,6 +127,51 @@ on `PATH` (e.g. one shipped by Tesseract). If it lives in a non-standard folder,
 its `bin` directory via `output.gtk_runtime_path` in `config.yaml`. Until it is present, PDF
 rendering fails fast with these instructions while PPTX/Excel still ship.
 
+### The `porter` command (type one word to start)
+
+A `porter.ps1` launcher runs the agent REPL from the project root using the venv Python (any
+arguments pass through to `main.py`). To type just `porter` from any terminal, add a function to
+your PowerShell `$PROFILE`:
+
+```powershell
+# One-time: add a 'porter' function pointing at the launcher
+Add-Content $PROFILE "`nfunction porter { & 'C:\path\to\strategy agent\porter.ps1' @args }"
+. $PROFILE   # reload (new terminals load it automatically)
+```
+
+Then:
+
+```powershell
+porter                                  # interactive REPL — chat with Porter
+porter ask "Was macht Neura Robotics?"  # one-shot question
+porter analyze "..." --effort ultra     # full pipeline, non-interactive
+```
+
+### Persistent memory & delta analysis
+
+With `memory.enabled: true` (default) and `nomic-embed-text` pulled, every run's analysis is
+embedded (`nomic-embed-text`, CPU) and stored in a local **ChromaDB** at `data/chroma_db/`. Before
+each new run the agent retrieves relevant prior findings and injects them; when you analyze the
+**same company a second time** it opens with a bilingual delta:
+
+> *Since our last analysis of Figure AI (2026-05-11, 3 weeks ago): the company announced a new
+> humanoid model and closed a fresh funding round…*
+
+After a run the agent may propose durable additions to `brain.md` (audience preferences, strategic
+facts) — you confirm `[y/N]` before anything is written. Memory is **advisory**: if ChromaDB or the
+embedding model is missing, the agent prints the exact fix and still delivers (it never blocks).
+The store is local and private — `data/chroma_db/` is gitignored.
+
+### Voice input (Ctrl+Space, fully local)
+
+Set `voice.enabled: true` in `config.yaml` (and install `faster-whisper pyaudio pynput`). In the
+REPL, press **Ctrl+Space** to dictate — a small overlay shows while pyaudio records, faster-whisper
+transcribes locally (DE/EN auto-detect), and the transcript is typed into the prompt as if you'd
+typed it. Or type **`/voice`** to speak a single task. faster-whisper downloads its model once on
+first use, then runs entirely offline. Voice is **additive** — disabled by default, it adds no hard
+dependency to the text REPL, and any mic/model failure prints an exact fix without breaking the REPL.
+Tune `voice.model` (size), `voice.language`, `voice.hotkey`, and `voice.max_record_seconds` in config.
+
 ## Usage
 
 ```powershell
@@ -129,8 +189,8 @@ python main.py analyze --effort low "Latest humanoid robotics funding news"
 # it asks one-at-a-time clarifying questions, shows the research plan + effort to confirm,
 # then runs the multi-agent research and produces a structured analysis. Prefix with
 # '/effort low|high|ultra' to override (alone, it sets the session default). Drop a file
-# path to read a document.
-python main.py            # type 'exit' to quit
+# path to read a document. Press Ctrl+Space (or type '/voice') to dictate if voice is on.
+porter                    # or: python main.py   — type 'exit' to quit
 
 # Single question — a plain one-shot LLM answer, no research, no clarification
 python main.py ask "Was macht Neura Robotics?"
@@ -200,29 +260,33 @@ via `--effort` / the REPL `/effort` prefix. `effort.worker_concurrency` caps how
 run at once — modest on a laptop (one local model serializes LLM calls), raised on a server. After a
 hardware upgrade you just edit these numbers — **zero code changes** to scale.
 
-## Project layout (through Phase 4)
+## Project layout
 
 ```
-config.yaml            # single source of all tunable params (effort dial, Neura colors, GTK path)
+config.yaml            # single source of all tunable params (effort dial, memory, voice, colors)
+porter.ps1             # 'porter' launcher — starts the REPL from the project root
 main.py                # entry point: analyze [--effort] / ask / research / prepare / analyze-doc / REPL
-core/                  # config (+ effort), startup checks, REPL intake (+ pipeline wiring),
-                       #   researcher (SearXNG + fetch + cache), pdf_reader, excel_reader,
-                       #   intent_parser (+ effort detection), clarification, memory (brain inject),
-                       #   playbooks, synthesizer, research_agent (worker + manager),
-                       #   critic (critique + revise), pipeline (the master loop), json_utils,
-                       #   content_shaper (analysis → typed deck/workbook), exporter (PDF + PPTX),
-                       #   excel_builder (E-1..E-4, formula-driven), doc_synthesis (CEO-office mode)
-llm/                   # backend-agnostic LocalLLMClient (text + Ollama vision)
+core/                  # config (+ effort/memory/voice), startup checks, REPL intake (+ pipeline,
+                       #   memory + voice wiring), researcher (SearXNG + fetch + cache), pdf_reader,
+                       #   excel_reader, intent_parser (+ effort detection), clarification,
+                       #   memory (brain inject + ChromaDB store + delta + brain-update),
+                       #   voice_input (Ctrl+Space → faster-whisper), playbooks, synthesizer,
+                       #   research_agent (worker + manager), critic (critique + revise),
+                       #   pipeline (the master loop), json_utils, content_shaper, exporter
+                       #   (PDF + PPTX), excel_builder (E-1..E-4), doc_synthesis (CEO-office mode)
+llm/                   # backend-agnostic LocalLLMClient (text + Ollama vision + embeddings)
 models/                # Pydantic v2 data contracts (all phases)
 templates/briefs/      # Jinja2 brief templates T-1..T-6 (+ shared Neura CSS/macros)
 assets/                # neura_logo.png (deck logo, bottom-right)
 playbooks/             # research / analysis / output / deep_research / doc_prep rulebooks
-tests/                 # pytest suite (177 tests)
+data/chroma_db/        # persistent memory (gitignored, local-only)
+tests/                 # pytest suite (221 tests)
 docker-compose.yml     # SearXNG
 ```
 
 `brain.md` (agent context) is **gitignored** and local-only; it is injected (read-only) into
-every synthesis call in Phase 3 and seeded with content in Phase 5.
+every synthesis call and is seeded with the public Neura context. The persistent memory store
+(`data/chroma_db/`) is likewise gitignored and never leaves your machine.
 
 ## Development
 
