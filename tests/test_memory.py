@@ -284,6 +284,24 @@ def test_recall_same_entity_produces_delta() -> None:
     assert result.prior_findings  # prior findings populated for synthesis injection
 
 
+def test_recall_delta_when_request_names_entity_despite_empty_extraction() -> None:
+    """Entity extraction returns [] but the request names a prior's entity → delta still fires."""
+    store = MemoryStore(_FakeCollection(), _stub_embed, top_k=5)
+    store.write(make_record(_intent(), _analysis(), ["Figure AI"], 85, today="2026-05-11"))
+
+    client = _StubClient(responses=["Up and to the right."])
+    result = recall(
+        store,
+        client,  # type: ignore[arg-type]
+        _intent(summary="Quick competitor brief on Figure AI"),
+        [],  # extraction failed this run
+        "CURRENT: Figure AI shipped Figure 03.",
+        today=date(2026, 6, 1),
+    )
+    assert result.delta_note is not None
+    assert result.delta_note.startswith("Since our last analysis of Figure AI")
+
+
 def test_recall_no_entity_overlap_has_no_delta() -> None:
     """A prior about a different entity yields prior_findings but no delta note."""
     store = MemoryStore(_FakeCollection(), _stub_embed, top_k=5)

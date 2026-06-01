@@ -348,6 +348,15 @@ def _entities_overlap(current: list[str], stored: list[str]) -> str | None:
     return None
 
 
+def _entity_in_text(entities: list[str], haystack: str) -> str | None:
+    """Return the first stored entity (length ≥ 3) that appears in the lowercased haystack."""
+    for entity in entities:
+        name = entity.strip()
+        if len(name) >= 3 and name.lower() in haystack:
+            return name
+    return None
+
+
 def _format_prior(records: list[MemoryRecord], max_records: int = 3, max_chars: int = 1500) -> str:
     """Render the most relevant prior runs as a compact PRIOR-FINDINGS block."""
     lines: list[str] = []
@@ -450,10 +459,16 @@ def recall(
         return Recall()
 
     prior_findings = _format_prior(records)
+    # Robust same-entity detection: match the current run's extracted entities OR a prior's known
+    # entity appearing in what this run is about (summary + findings). The second path means a flaky
+    # entity-extraction call never silently loses the delta when the new request names the entity.
+    haystack = f"{intent.summary}\n{current_digest}".lower()
     for record in records:
-        overlap = _entities_overlap(entities, record.entities)
-        if overlap:
-            note = build_delta_note(client, intent, record, current_digest, overlap, today=today)
+        match = _entities_overlap(entities, record.entities) or _entity_in_text(
+            record.entities, haystack
+        )
+        if match:
+            note = build_delta_note(client, intent, record, current_digest, match, today=today)
             return Recall(prior_findings=prior_findings, delta_note=note, matched=[record])
     return Recall(prior_findings=prior_findings, matched=[])
 
