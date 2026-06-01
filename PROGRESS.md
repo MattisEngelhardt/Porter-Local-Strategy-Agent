@@ -743,49 +743,196 @@ output (N-6). 177 tests green, ruff + mypy --strict clean. PDF + PPTX + Excel al
 **Session status**: IN PROGRESS
 
 ### Phase Plan (atomic; 1 commit each `phase-5: …`; PROGRESS updated per task)
-[ ] 0. Baseline 177 (176 pass + 1 skip) ✓ (RULE 11). Pull `nomic-embed-text`; install
-       chromadb / faster-whisper / pyaudio / pynput into venv; add mypy overrides for the
-       stub-less libs. Document any dep that cannot be installed (fail-fast code, not silent skip).
-[ ] 1. `LocalLLMClient.embed(texts)` — provider-aware embeddings (Ollama `/api/embeddings`;
-       OpenAI-compatible `/v1/embeddings`), `embedding_model` from config (RULE 6/10). Fail-fast
-       `LLMError` with the exact `ollama pull nomic-embed-text` fix. Tests (payload + dispatch).
-[ ] 2. `core/memory.py` ChromaDB store — `MemoryStore` (write/retrieve via injected `embed_fn`
-       + duck-typed collection), `open_memory()` factory (persistent client; fail-open
-       `MemoryLayerError` w/ fix), `MemoryRecord`, `extract_entities()`. Tests: FakeCollection +
-       real `EphemeralClient` roundtrip (importorskip), fail-open paths.
-[ ] 3. Delta analysis — `recall()`: retrieve prior findings, entity-overlap match → bilingual
-       delta note (LLM compare, fail-open deterministic template) naming the prior date
-       ("Seit unserer letzten Analyse von X vom [Datum] …"). Tests.
-[ ] 4. Pipeline wiring — retrieve BEFORE synthesis (inject `prior_findings` + delta into
-       `SynthesisInput`, SPEC §5.3 step 6), write AFTER render. `PipelineResult.delta_note` +
-       `proposed_brain_additions` (defaults → back-compat). `memory` param + caller-side
-       `resolve_memory`; fail-open notify. Tests (fake store: inject + write + delta).
-[ ] 5. Brain-update propose flow — `propose_brain_additions()` + `append_brain_additions()`;
-       REPL confirm [y/N] (default **No**) via the `Interaction` abstraction. Seed `brain.md`
-       from SPEC §3.5 verbatim (Company Basics / Funding / Strategic Moves) — gitignored, N-9.
-       Tests (intake brain-update flow + memory helpers).
-[ ] 6. `core/voice_input.py` — extend `VoiceConfig`; `VoiceInput` (Ctrl+Space pynput hotkey →
-       Tkinter overlay → pyaudio capture → faster-whisper transcribe DE/EN → inject as typed),
-       lazy imports, fail-fast w/ exact instructions, `voice.enabled=false` → no hotkey thread /
-       no hard dep. REPL integration (`/voice` command + hotkey). Tests (stubbed record/transcribe/
-       inject seams; disabled → no-op; fail-fast messages).
-[ ] 6b. **Porter launcher** (user request) — type `porter` in the VS Code PowerShell terminal to
-       drop straight into the local Strategy Agent REPL (the full Phase 1–5 agent, fully local).
-       `porter.ps1` (venv python + main.py from project root) + a `porter` function in the user's
-       PowerShell `$PROFILE` (so bare `porter` works anywhere) + rebrand the REPL display name to
-       **Porter**. SPEC content / Neura facts / file outputs unchanged (RULE 14 — display name only).
-[ ] 7. Production polish — README final (Memory / Voice / Delta usage + setup + `porter`),
-       config.yaml voice fields, audit every dependency-failure message
-       (Ollama/SearXNG/ChromaDB/embedding/mic/model) for exact fix instructions. Quality gate:
-       ruff format + ruff check + `mypy --strict core llm models main.py` + full pytest — all green.
-[ ] 8. Live end-to-end verification — DE + EN, all output types, both paths (research + doc-prep);
-       second-run delta live; Business-Case (German) → German PPTX + Excel; voice live (manual).
-       Document results. WORKFLOW phase table row 5 → ✅. `git push origin main`.
+[x] 0. Baseline 177 (176 pass + 1 skip) ✓ (RULE 11). Pulled `nomic-embed-text`; installed
+       chromadb / faster-whisper / pyaudio / pynput into venv (all import cleanly); added mypy
+       overrides for the stub-less libs. (done 2026-06-01)
+[x] 1. `LocalLLMClient.embed(texts)` — provider-aware (Ollama `/api/embeddings`; OpenAI
+       `/v1/embeddings`), `embedding_model` from config, fail-fast w/ exact pull fix. +5 tests
+       incl. a live embed (done 2026-06-01 — 181 green).
+[x] 2. `core/memory.py` ChromaDB store — `MemoryStore` (write/retrieve via injected `embed_fn`
+       + duck-typed collection), `open_memory()` factory (persistent; fail-open `MemoryLayerError`),
+       `MemoryRecord`, `extract_entities`, `make_record`/`build_memory_document` (done 2026-06-01).
+[x] 3. Delta analysis — `recall()`: retrieve priors, entity-overlap → bilingual delta note
+       (guaranteed header + LLM body, fail-open template) naming the prior date + age
+       (done 2026-06-01 — committed with task 2; +21 memory tests, 199 green).
+[x] 4. Pipeline wiring — retrieve BEFORE synthesis (delta + `prior_findings` → `SynthesisInput`,
+       SPEC §5.3 step 6), write AFTER render; `resolve_memory`; `memory` param; `delta_note` +
+       `proposed_brain_additions` on `PipelineResult`; fail-open notify; REPL + `analyze` wired.
+       +6 tests (done 2026-06-01).
+[x] 5. Brain-update flow — `propose_brain_additions` + `append_brain_additions` (idempotent
+       managed heading) + REPL `_maybe_update_brain` [y/N] (default No). Seeded `brain.md` from
+       SPEC §3.5 verbatim (Company Basics / Funding / Nvidia + SRCI moves) — gitignored, N-9,
+       68 injected lines, all facts verified present (done 2026-06-01).
+[x] 6. `core/voice_input.py` — `VoiceInput` (Ctrl+Space pynput → Tkinter overlay → pyaudio →
+       faster-whisper DE/EN → inject as typed), lazy imports, fail-fast, `enabled=false` → no
+       hotkey thread; REPL `/voice` + hotkey + stop-on-exit; `VoiceConfig` extended. +17 tests
+       (done 2026-06-01 — 221 green).
+[x] 6b. **Porter launcher** — `porter.ps1` (venv python + main.py from project root) + a `porter`
+       function added to the user's PowerShell `$PROFILE`; REPL banner rebranded to **Porter**.
+       Verified: `porter --help` runs; `$PROFILE` function resolves (done 2026-06-01).
+[x] 7. Production polish — README finalized (Porter / memory / delta / voice / setup), config.yaml
+       voice fields, dependency-failure messages audited. Quality gate: ruff + `mypy --strict`
+       (30 files) + 221 pytest — all green (done 2026-06-01).
+[x] 8. Live end-to-end verification — EN competitor brief (PDF + memory write), memory/delta live
+       (real nomic + ChromaDB + gemma; hardened so a flaky extraction never loses the delta),
+       German business case → German PPTX + 5-tab Excel (N-10 holds), voice fail-fast verified.
+       PROGRESS handoff + `git push` (done 2026-06-01).
 
 ### Estimated scope: Large (the final phase — memory layer + voice layer + production polish)
-### Critical dependencies: Ollama (✓ up, gemma4:e4b) · SearXNG (✓ up, JSON) · nomic-embed-text
-(pulling) · chromadb/faster-whisper/pyaudio/pynput (installing). Renderers + wired pipeline (Phase 4)
-ready to consume.
+### Critical dependencies: Ollama (✓ gemma4:e4b) · SearXNG (✓ JSON) · nomic-embed-text (✓ pulled)
+· chromadb 1.5.9 + faster-whisper + pyaudio 0.2.14 + pynput (✓ installed). Renderers + wired
+pipeline (Phase 4) consumed as-is.
 
-### PHASE 5 STATUS: ⏳ IN PROGRESS
+### What Was Built (Phase 5)
+- **`LocalLLMClient.embed(texts)`** — provider-aware embeddings: Ollama native `/api/embeddings`
+  (one request per text) and OpenAI-compatible `/v1/embeddings`; uses `llm.embedding_model`
+  (`nomic-embed-text`, CPU — no VRAM competition). Fail-fast `LLMError` with the exact
+  `ollama pull nomic-embed-text` fix on a missing model/empty vector (RULE 6/10).
+- **`core/memory.py` (Layer 2 — ChromaDB)** — `MemoryStore` writes each run's analysis digest
+  (title + bottom line + sections) as an embedded document with metadata (entities, ISO timestamp,
+  task type, language, quality score) and retrieves the nearest priors. `open_memory()` builds a
+  persistent client at `data/chroma_db` with `embedding_function=None` (vectors always come from
+  our local embedder — **nothing is ever downloaded by ChromaDB**). `extract_entities()` (fast LLM,
+  fail-open) tags runs. `recall()` retrieves priors, builds the injected `prior_findings`, and — on
+  an **entity overlap** — produces a **bilingual delta note**: a deterministically-built header
+  (`Since our last analysis of X (date, N weeks ago):` / German) guaranteeing the SPEC §15 phrase,
+  plus an LLM "what changed" body that **fails open** to a template.
+- **Brain-update flow (Layer 1)** — `propose_brain_additions()` (durable, high-signal only;
+  fail-open) + `append_brain_additions()` (idempotent `## AGENT-PROPOSED ADDITIONS` heading, dated
+  bullets, kept by `load_brain`). The REPL's `_maybe_update_brain` shows them and writes only on an
+  explicit `[y/N]` **default-No** confirm (brain.md is confidential — N-9). `brain.md` seeded from
+  SPEC §3.5 (Company Basics / Funding History / Nvidia + SRCI moves) verbatim.
+- **Pipeline wiring** — `run_pipeline` gained a `memory` param (advisory). Research path:
+  retrieve+delta **before** synthesis (delta + priors injected into `SynthesisInput.prior_findings`,
+  SPEC §5.3 step 6) → write the run **after** delivery → propose brain additions (effort-gated, not
+  on LOW). Every memory op is wrapped fail-open (`MemoryLayerError` → `notify`, deliver anyway).
+  `resolve_memory()` opens the store once (caller-side); the REPL and `analyze` pass it in.
+  `PipelineResult` gained `delta_note` + `proposed_brain_additions` (defaults → back-compat).
+- **`core/voice_input.py` (Layer — voice)** — `VoiceInput`: Ctrl+Space (pynput `GlobalHotKeys`) →
+  Tkinter overlay → pyaudio capture (16 kHz mono, `max_record_seconds`) → faster-whisper transcribe
+  (DE/EN auto) → inject as typed (pynput `Controller`). All heavy libs **lazy-imported** via
+  `_require` (exact pip fix on ImportError); `voice.enabled=false` → `build_voice_input` returns
+  None (no hotkey thread, no hard dep). Record/transcribe/inject/overlay are overridable seams →
+  fully unit-tested without a mic/model. REPL: `/voice` synchronous command + the hotkey path +
+  stop-on-exit.
+- **`porter` launcher** — `porter.ps1` runs the REPL from the project root via the venv Python
+  (args pass through to `main.py`); a `porter` function added to the user's PowerShell `$PROFILE`.
+  REPL banner rebranded **Porter** (display only — RULE 14, no content/output change).
+
+### Key Technical Decisions (Phase 5)
+| Decision | Choice | Reason |
+|----------|--------|--------|
+| Memory = advisory/fail-open vs fail-fast | Fail-**open** everywhere (notify the exact fix, deliver anyway); embeddings/ChromaDB never block | SPEC REQ-5 + kickoff: memory is additive. "No silent degrade" satisfied by always surfacing the precise fix. Hard deps (Ollama/SearXNG) keep their fail-fast. |
+| ChromaDB embeddings | We pass vectors directly (`embedding_function=None`); embed via `LocalLLMClient.embed` | Keeps everything local — ChromaDB never downloads its default ONNX model; honors RULE 6 (all embed calls via the client). |
+| Entity matching for delta | LLM `extract_entities` + forgiving case-insensitive substring overlap | Precise "same company" detection that still fires on `Figure` vs `Figure AI`; semantic retrieval finds candidates, entity overlap gates the delta. |
+| Delta note construction | Deterministic header (guarantees the §15 phrase + date + age) + LLM body, fail-open to a template | The success-gate phrase always appears even if the model hiccups. |
+| `run_pipeline` opens memory? | **No** — caller opens via `resolve_memory`, passes it in (`None` = off) | Keeps the 177 prior tests untouched (they pass no store → memory off) and avoids surprise ChromaDB/embedding calls in tests. |
+| Brain append target | EOF under one idempotent `## AGENT-PROPOSED ADDITIONS` heading | No mid-file surgery; survives repeated confirms without duplicate headers; `load_brain` keeps the bullets, strips the `#` comment. |
+| Voice recording | Fixed `max_record_seconds` window per press (config-driven) | Robust + dependency-light (no deprecated `audioop` silence detection); good enough for a local push-to-talk tool. |
+| Voice deps | Lazy `_require()` indirection (not top-level imports) | Importing `core.voice_input` needs none of pyaudio/whisper/pynput; tests force the ImportError branch by monkeypatching `importlib.import_module`. |
+| Porter launcher encoding | ASCII-only `porter.ps1` | PowerShell 5.1 reads BOM-less UTF-8 `.ps1` as ANSI — em dashes broke the parse; ASCII is portable. |
+
+### Files Created/Modified (Phase 5)
+| File | Status | Key Contents |
+|------|--------|-------------|
+| llm/local_llm_client.py | Modified | `embed()` + `_embed_ollama`/`_embed_openai` + `embedding_model` property |
+| core/memory.py | Modified | ChromaDB `MemoryStore`/`open_memory`/`MemoryRecord`, `extract_entities`, `recall`+`build_delta_note`, brain-update helpers (kept `load_brain`) |
+| core/pipeline.py | Modified | `resolve_memory`, memory retrieve/write wiring, `_quality_score`, `memory` param |
+| core/intake.py | Modified | session memory + voice wiring, `/voice`, `_maybe_update_brain`, delta panel, Porter banner |
+| core/voice_input.py | Created | `VoiceInput` + `build_voice_input` (lazy, fail-fast, seam-testable) |
+| core/config.py / config.yaml | Modified | `VoiceConfig` (sample_rate/max_record_seconds/compute_type/device_index) |
+| models/synthesis.py | Modified | `PipelineResult.delta_note` + `proposed_brain_additions` |
+| main.py | Modified | `analyze` resolves + passes `memory` |
+| porter.ps1 | Created | one-word launcher (venv python + main.py) |
+| brain.md | Modified (gitignored) | seeded with SPEC §3.5 public facts |
+| pyproject.toml | Modified | mypy overrides: chromadb/faster_whisper/pyaudio/pynput |
+| tests/test_local_llm_client / test_memory / test_pipeline / test_intake / test_voice_input | Created/Modified | +5 / +21 / +6 / +7 / +14 tests |
+
+### Tests Status (Phase 5)
+- **221 passed, 1 skipped** (up from 177), in ~40s. `ruff format` + `ruff check` clean;
+  `mypy --strict core llm models main.py` clean (**30** source files). New coverage: embed
+  payload/parse/fail-fast + live embed; memory write/retrieve (fake + real `EphemeralClient`),
+  entity extraction, recall delta (same/diff/empty entity), delta fail-open template, brain
+  propose/append + `load_brain` keep; pipeline memory delta-inject+write + fail-open; REPL
+  brain-update [y/N] + delta panel; voice capture/handle-hotkey/inject seams + lazy-import fail-fast
+  + hotkey parsing + `start()` listener.
+
+### Git Log (this session)
+- phase-5: LocalLLMClient.embed (provider-aware nomic-embed-text) + Phase 5 plan
+- phase-5: porter launcher + REPL display name 'Porter'
+- phase-5: ChromaDB memory store + delta analysis + brain-update helpers
+- phase-5: wire ChromaDB memory into pipeline + REPL brain-update flow
+- phase-5: local voice input (Ctrl+Space -> faster-whisper -> REPL)
+- phase-5: finalize README (Porter launcher, memory/delta, voice, setup)
+- phase-5: harden delta detection (match prior entity named in the request)
+- phase-5: Phase 5 complete — live verification + handoff (this commit)
+
+### Live Verification (this session — real Ollama/gemma4:e4b + SearXNG + ChromaDB)
+- **Memory + embeddings + delta (mechanism):** real `nomic-embed-text` embeddings + real ChromaDB
+  PersistentClient write→query + real gemma delta → *"Since our last analysis of Figure AI
+  (2026-05-11, 3 weeks ago): …new humanoid model… fresh funding round in 2026."* ✅
+- **Delta robustness:** the headline gate could be missed when the per-run entity-extraction call
+  flakes (observed live on run #2). Hardened `recall` to also match a **prior's entity named in the
+  current request**; re-verified live with **empty extraction** → delta still fires
+  ("…$1B → $39B valuation…"). ✅
+- **End-to-end EN run (`analyze --effort low` "competitor brief on Figure AI"):** 24 sources
+  evaluated / 3 read → Neura-Lens analysis (brain.md context visible) → **PDF written** to
+  `./output/`, run **stored in ChromaDB** (entity `Figure AI`, quality 100), exit 0. ✅
+- **German business case (`analyze --effort low`, DE):** one run → **German 9-slide PPTX deck**
+  (markers: für/und/Markt/Investition/Geschäft/Analyse) **+ 5-tab Excel** business-case model
+  (Summary/Assumptions/Projections/Scenarios/Sources); `Summary!B5 = =Assumptions!$B$4` re-opens as
+  `None` under `data_only` → **pure formula, N-10 holds**. Dual output in one run (N-6). ✅
+- **Voice:** pynput/pyaudio/faster-whisper/numpy installed + import clean; `VoiceInput` logic +
+  seams unit-tested; model-load **fail-fast verified** (the agent shell blocks the one-time
+  HuggingFace download — `LocalEntryNotFoundError`/SSL — exactly like the Phase-4 GTK case; the
+  error carries the exact fix). **Manual user step (needs network for the one-time model download +
+  a real mic + interactive desktop):** set `voice.enabled: true`, press **Ctrl+Space** to dictate.
+- **Zero errors end-to-end** across all three live runs (EN + DE), exit 0 each. `pytest` 223 passed
+  / 1 skipped; `ruff` clean; `mypy --strict` 30 files clean.
+
+### PROJECT COMPLETE — what Porter does end-to-end
+Porter is a **100% local** research/strategy agent for the Neura Robotics CEO-Office + Strategy
+internships. One command — **`porter`** — opens the REPL (or `python main.py`). You give it a task
+by **text or voice (Ctrl+Space)**, in German or English; it parses intent + auto-detects effort
+(`low`/`high`/`ultra`), asks ≤2 clarifying questions, confirms a research plan, then runs
+**multi-agent web research** (SearXNG + parallel workers, source+date+confidence on every fact),
+**consults persistent memory** (ChromaDB) to inject prior findings and a **bilingual delta** on
+repeat entities, reasons with **brain.md** Neura context + playbooks, **self-critiques and revises**,
+and renders the routed deliverables: a **PDF brief** (T-1..T-6), a **Neura PPTX deck** (10 slide
+types, logo), and/or a **formula-driven Excel workbook** (E-1..E-4); a **business case** emits a deck
+**and** an Excel model in one run. After delivery it stores the run and may propose durable
+**brain.md** additions for `[y/N]` confirm. CEO-office **document-prep** mode consolidates internal
+files (zero-hallucination) without web research. Everything is local (Ollama `gemma4:e4b` +
+`nomic-embed-text`, SearXNG, python-pptx/openpyxl/WeasyPrint) — no external AI API, ever. Memory and
+voice are **advisory/fail-open**; hard deps fail fast with exact fixes.
+
+**Run it:** `porter` (REPL) · `porter analyze "…" --effort ultra` · `porter prepare file.pdf` ·
+`porter ask "…"`. Prereqs: Ollama (`gemma4:e4b` + `nomic-embed-text`), Docker/SearXNG, `pip install
+-r requirements.txt`; PDF needs the GTK/Pango runtime (MSYS2) and voice needs the one-time
+faster-whisper model download. Next step (post-Phase-5, recorded above): **fix the thin
+bibliography** so every source the workers used lands in the brief.
+
+### Post-Phase-5 Backlog (next steps — DO NOT LOSE)
+1. **Bibliography too thin (must-fix, user-flagged 2026-06-01).** Rendered briefs usually list
+   **fewer than 5 sources** — clearly insufficient for strategy work. Today the bibliography is
+   whatever the LLM emits in its JSON `sources` (`core/synthesizer.py` `_coerce_sources`); the
+   deterministic `_sources_from_research` fallback only fires when the LLM cites **none**, and gemma
+   lists very few. **Fix:** the research workers already carry the real sources
+   (`WorkerFindings.sources` + every `Finding.source_url` with date/confidence, aggregated in
+   `ResearchReport.worker_findings`/`.evidence`); deterministically compile the bibliography from the
+   **union of all worker sources + finding URLs** (dedup by URL, keep date + tier via
+   `classify_tier` + confidence) and **always merge** it into `AnalysisOutput.sources` (not only when
+   the LLM emits zero). Mostly a synthesizer change + passing the full `ResearchReport` sources into
+   synthesis; the PDF/PPTX sources sections already consume `AnalysisOutput.sources`. Watch `num_ctx`
+   (more sources = bigger prompt). The agent's directive: *workers send all their best/used sources →
+   the orchestrating agent writes them all into the bibliography.*
+
+### PHASE 5 STATUS: ✅ COMPLETE
+(ChromaDB session memory with `nomic-embed-text` embeddings + bilingual delta analysis
+(hardened, live-verified) + brain.md seed/propose-flow + local voice input (Ctrl+Space →
+faster-whisper) + the `porter` launcher + production polish. Memory/voice are advisory/fail-open.
+223 tests + ruff + `mypy --strict` (30 files) green. Live-verified: EN end-to-end (PDF + memory),
+delta on repeat entity, German business case → German PPTX + Excel (N-6/N-10). **The Strategy Agent
+("Porter") is complete end-to-end.** One known post-phase next step recorded: thicken the
+bibliography.)
 ---
