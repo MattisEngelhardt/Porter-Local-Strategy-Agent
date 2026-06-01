@@ -736,3 +736,56 @@ read, targeted clarifications, .md blueprint, and **real PPTX + PDF rendering** 
 templates (N-10). Rendering wired into both the research and doc-prep paths; business case = dual
 output (N-6). 177 tests green, ruff + mypy --strict clean. PDF + PPTX + Excel all live-verified.)
 ---
+
+## PHASE 5 — Memory + Voice + Polish (Production-Ready)
+**Executed by**: Opus (claude-opus-4-8)
+**Date**: 2026-06-01
+**Session status**: IN PROGRESS
+
+### Phase Plan (atomic; 1 commit each `phase-5: …`; PROGRESS updated per task)
+[ ] 0. Baseline 177 (176 pass + 1 skip) ✓ (RULE 11). Pull `nomic-embed-text`; install
+       chromadb / faster-whisper / pyaudio / pynput into venv; add mypy overrides for the
+       stub-less libs. Document any dep that cannot be installed (fail-fast code, not silent skip).
+[ ] 1. `LocalLLMClient.embed(texts)` — provider-aware embeddings (Ollama `/api/embeddings`;
+       OpenAI-compatible `/v1/embeddings`), `embedding_model` from config (RULE 6/10). Fail-fast
+       `LLMError` with the exact `ollama pull nomic-embed-text` fix. Tests (payload + dispatch).
+[ ] 2. `core/memory.py` ChromaDB store — `MemoryStore` (write/retrieve via injected `embed_fn`
+       + duck-typed collection), `open_memory()` factory (persistent client; fail-open
+       `MemoryLayerError` w/ fix), `MemoryRecord`, `extract_entities()`. Tests: FakeCollection +
+       real `EphemeralClient` roundtrip (importorskip), fail-open paths.
+[ ] 3. Delta analysis — `recall()`: retrieve prior findings, entity-overlap match → bilingual
+       delta note (LLM compare, fail-open deterministic template) naming the prior date
+       ("Seit unserer letzten Analyse von X vom [Datum] …"). Tests.
+[ ] 4. Pipeline wiring — retrieve BEFORE synthesis (inject `prior_findings` + delta into
+       `SynthesisInput`, SPEC §5.3 step 6), write AFTER render. `PipelineResult.delta_note` +
+       `proposed_brain_additions` (defaults → back-compat). `memory` param + caller-side
+       `resolve_memory`; fail-open notify. Tests (fake store: inject + write + delta).
+[ ] 5. Brain-update propose flow — `propose_brain_additions()` + `append_brain_additions()`;
+       REPL confirm [y/N] (default **No**) via the `Interaction` abstraction. Seed `brain.md`
+       from SPEC §3.5 verbatim (Company Basics / Funding / Strategic Moves) — gitignored, N-9.
+       Tests (intake brain-update flow + memory helpers).
+[ ] 6. `core/voice_input.py` — extend `VoiceConfig`; `VoiceInput` (Ctrl+Space pynput hotkey →
+       Tkinter overlay → pyaudio capture → faster-whisper transcribe DE/EN → inject as typed),
+       lazy imports, fail-fast w/ exact instructions, `voice.enabled=false` → no hotkey thread /
+       no hard dep. REPL integration (`/voice` command + hotkey). Tests (stubbed record/transcribe/
+       inject seams; disabled → no-op; fail-fast messages).
+[ ] 6b. **Porter launcher** (user request) — type `porter` in the VS Code PowerShell terminal to
+       drop straight into the local Strategy Agent REPL (the full Phase 1–5 agent, fully local).
+       `porter.ps1` (venv python + main.py from project root) + a `porter` function in the user's
+       PowerShell `$PROFILE` (so bare `porter` works anywhere) + rebrand the REPL display name to
+       **Porter**. SPEC content / Neura facts / file outputs unchanged (RULE 14 — display name only).
+[ ] 7. Production polish — README final (Memory / Voice / Delta usage + setup + `porter`),
+       config.yaml voice fields, audit every dependency-failure message
+       (Ollama/SearXNG/ChromaDB/embedding/mic/model) for exact fix instructions. Quality gate:
+       ruff format + ruff check + `mypy --strict core llm models main.py` + full pytest — all green.
+[ ] 8. Live end-to-end verification — DE + EN, all output types, both paths (research + doc-prep);
+       second-run delta live; Business-Case (German) → German PPTX + Excel; voice live (manual).
+       Document results. WORKFLOW phase table row 5 → ✅. `git push origin main`.
+
+### Estimated scope: Large (the final phase — memory layer + voice layer + production polish)
+### Critical dependencies: Ollama (✓ up, gemma4:e4b) · SearXNG (✓ up, JSON) · nomic-embed-text
+(pulling) · chromadb/faster-whisper/pyaudio/pynput (installing). Renderers + wired pipeline (Phase 4)
+ready to consume.
+
+### PHASE 5 STATUS: ⏳ IN PROGRESS
+---

@@ -16,6 +16,8 @@ strategy_agent_SPEC.md
 opus_WORKFLOW.md
 PHASE_3.5_PLAN.md
 PHASE_4_KICKOFF.md
+PHASE_5_KICKOFF.md
+demo_prompt.txt
 
 # Generated outputs (keep the directory, ignore its contents)
 output/*

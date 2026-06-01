@@ -68,6 +68,7 @@ class LocalLLMClient:
         self._provider = config.provider.lower()
         self._base_url = config.base_url.rstrip("/")
         self._model = config.model
+        self._embedding_model = config.embedding_model
         self._num_ctx = config.num_ctx
         self._temperature = config.temperature
         self._thinking_default = config.thinking_mode
@@ -90,6 +91,11 @@ class LocalLLMClient:
     def provider(self) -> str:
         """The configured provider (selects the transport)."""
         return self._provider
+
+    @property
+    def embedding_model(self) -> str:
+        """The configured embedding model name (never hardcoded; used by the memory layer)."""
+        return self._embedding_model
 
     def switch_model(self, model_name: str) -> None:
         """Switch the active model at runtime (re-detects the model family)."""
@@ -274,6 +280,68 @@ class LocalLLMClient:
                     yield delta
         except Exception as exc:
             raise self._wrap_openai_error(exc) from exc
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        """Embed texts with the configured embedding model (provider-aware, local, CPU).
+
+        Used by the ChromaDB memory layer (Phase 5). The embedding model
+        (``llm.embedding_model``, default ``nomic-embed-text``) runs on CPU via Ollama so it
+        never competes with the chat model for VRAM (SPEC §4.5). All embedding traffic goes
+        through this client (RULE 6) — no raw requests in the memory layer.
+
+        Args:
+            texts: The strings to embed (one vector returned per string, order preserved).
+
+        Returns:
+            One embedding vector per input string.
+
+        Raises:
+            LLMConnectionError: If the backend is unreachable (fail fast, SPEC REQ-5).
+            LLMError: If the embedding model is not available (with the exact pull fix).
+        """
+        if not texts:
+            return []
+        if self._provider == _OLLAMA_PROVIDER:
+            return [self._embed_ollama(text) for text in texts]
+        return self._embed_openai(texts)
+
+    def _embed_ollama(self, text: str) -> list[float]:
+        """Embed one string via Ollama's native /api/embeddings endpoint."""
+        url = f"{self._base_url}/api/embeddings"
+        payload = {"model": self._embedding_model, "prompt": text}
+        try:
+            response = self._client().post(url, json=payload)
+            response.raise_for_status()
+        except httpx.ConnectError as exc:
+            raise self._connection_error(exc) from exc
+        except httpx.HTTPStatusError as exc:
+            # 404 / 400 here almost always means the embedding model is not pulled.
+            raise self._embedding_model_error() from exc
+        except httpx.HTTPError as exc:
+            raise LLMError(f"Embedding request to {url} failed: {exc}") from exc
+        data: dict[str, Any] = response.json()
+        vector = data.get("embedding")
+        if not isinstance(vector, list) or not vector:
+            raise self._embedding_model_error()
+        return [float(value) for value in vector]
+
+    def _embed_openai(self, texts: list[str]) -> list[list[float]]:
+        """Embed via an OpenAI-compatible /v1/embeddings endpoint (LM Studio / llama.cpp)."""
+        try:
+            raw = self._openai_client().embeddings.create(model=self._embedding_model, input=texts)
+        except Exception as exc:  # openai SDK raises its own error hierarchy
+            raise self._wrap_openai_error(exc) from exc
+        return [list(item.embedding) for item in raw.data]
+
+    def _embedding_model_error(self) -> LLMError:
+        """Build a fail-fast error for a missing embedding model (with the exact pull fix)."""
+        return LLMError(
+            f"Embedding model '{self._embedding_model}' is not available at {self._base_url}.\n"
+            "Fix:\n"
+            f"  1. Pull it: 'ollama pull {self._embedding_model}'.\n"
+            "  2. Confirm 'llm.embedding_model' in config.yaml matches a pulled model.\n"
+            "  (Persistent memory needs embeddings — the agent still runs without it.)"
+        )
 
     def _stream_ollama(self, messages: list[dict[str, Any]], num_ctx: int) -> Iterator[str]:
         """Stream from Ollama's native /api/chat (NDJSON), yielding content chunks."""

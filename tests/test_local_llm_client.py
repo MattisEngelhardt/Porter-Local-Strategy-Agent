@@ -177,6 +177,106 @@ def test_images_rejected_on_non_ollama_backend() -> None:
     assert "vision" in str(excinfo.value).lower()
 
 
+# ---------------------------------------------------------------------- embeddings (Phase 5)
+class _FakeResp:
+    """Minimal httpx.Response stand-in for the embedding endpoint."""
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = data
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict[str, Any]:
+        return self._data
+
+
+class _FakeHttp:
+    """Records POSTs to /api/embeddings and returns a canned embedding vector."""
+
+    def __init__(self, data: dict[str, Any]) -> None:
+        self._data = data
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def post(self, url: str, json: dict[str, Any]) -> _FakeResp:
+        self.calls.append((url, json))
+        return _FakeResp(self._data)
+
+
+def test_embed_ollama_payload_and_parse() -> None:
+    """embed() hits /api/embeddings with the embedding model + prompt, one vector per text."""
+    client = LocalLLMClient(_ollama_config())
+    fake = _FakeHttp({"embedding": [0.1, 0.2, 0.3]})
+    client._http = fake  # type: ignore[assignment]  # bypass lazy httpx client
+
+    vectors = client.embed(["hello", "world"])
+
+    assert vectors == [[0.1, 0.2, 0.3], [0.1, 0.2, 0.3]]
+    assert len(fake.calls) == 2  # one request per text
+    url, payload = fake.calls[0]
+    assert url.endswith("/api/embeddings")
+    assert payload == {"model": "nomic-embed-text", "prompt": "hello"}
+
+
+def test_embed_empty_input_returns_empty() -> None:
+    """Embedding an empty list makes no request and returns []."""
+    client = LocalLLMClient(_ollama_config())
+    assert client.embed([]) == []
+
+
+def test_embed_missing_model_fails_fast() -> None:
+    """A 4xx from Ollama (model not pulled) raises LLMError with the exact pull fix."""
+    from llm.local_llm_client import LLMError
+
+    class _ErrResp:
+        def raise_for_status(self) -> None:
+            request = httpx.Request("POST", "http://localhost:11434/api/embeddings")
+            response = httpx.Response(404, request=request)
+            raise httpx.HTTPStatusError("not found", request=request, response=response)
+
+        def json(self) -> dict[str, Any]:
+            return {}
+
+    class _ErrHttp:
+        def post(self, url: str, json: dict[str, Any]) -> _ErrResp:
+            return _ErrResp()
+
+    client = LocalLLMClient(_ollama_config())
+    client._http = _ErrHttp()  # type: ignore[assignment]
+    with pytest.raises(LLMError) as excinfo:
+        client.embed(["x"])
+    message = str(excinfo.value)
+    assert "ollama pull nomic-embed-text" in message
+    assert "Fix:" in message
+
+
+def test_embed_empty_vector_fails_fast() -> None:
+    """An empty/garbled embedding response fails fast rather than returning a bad vector."""
+    from llm.local_llm_client import LLMError
+
+    client = LocalLLMClient(_ollama_config())
+    client._http = _FakeHttp({"embedding": []})  # type: ignore[assignment]
+    with pytest.raises(LLMError):
+        client.embed(["x"])
+
+
+def test_live_embed_returns_vectors() -> None:
+    """Live: a real embedding against the configured embedding model returns float vectors."""
+    from llm.local_llm_client import LLMError
+
+    config = load_config(CONFIG_PATH)
+    if not _ollama_reachable(config.llm.base_url):
+        pytest.skip("Ollama not reachable — skipping live embedding test.")
+    client = LocalLLMClient(config.llm)
+    try:
+        vectors = client.embed(["humanoid robotics funding"])
+    except LLMError as exc:  # embedding model not pulled on this machine
+        pytest.skip(f"Embedding model unavailable — skipping: {exc}")
+    assert len(vectors) == 1
+    assert len(vectors[0]) > 10
+    assert all(isinstance(value, float) for value in vectors[0])
+
+
 # ---------------------------------------------------------------- connection error
 def test_connection_error_is_fail_fast() -> None:
     """An unreachable backend raises LLMConnectionError with fix instructions."""
