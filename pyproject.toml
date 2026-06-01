@@ -41,5 +41,11 @@ module = [
     "openpyxl",
     "openpyxl.*",
     "weasyprint",
+    "chromadb",
+    "chromadb.*",
+    "faster_whisper",
+    "pyaudio",
+    "pynput",
+    "pynput.*",
 ]
 ignore_missing_imports = true
