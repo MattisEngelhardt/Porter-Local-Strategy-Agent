@@ -220,6 +220,37 @@ def test_maybe_update_brain_noop_without_proposals(
     assert not Path(config.memory.brain_path).exists()
 
 
+class _StubVoiceObj:
+    """Duck-typed VoiceInput stand-in: returns a canned transcript from capture_once()."""
+
+    def __init__(self, transcript: str) -> None:
+        self._transcript = transcript
+
+    def capture_once(self) -> str:
+        return self._transcript
+
+
+def test_capture_voice_disabled_prints_enable_hint() -> None:
+    """With voice off, /voice prints how to enable it and returns None."""
+    console = _capture_console()
+    assert intake._capture_voice(console, None, "cyan") is None
+    out = console.file.getvalue()  # type: ignore[attr-defined]
+    assert "voice.enabled" in out
+
+
+def test_capture_voice_returns_transcript() -> None:
+    """/voice returns the spoken transcript when capture succeeds."""
+    console = _capture_console()
+    result = intake._capture_voice(console, _StubVoiceObj("analyze figure ai"), "cyan")  # type: ignore[arg-type]
+    assert result == "analyze figure ai"
+
+
+def test_capture_voice_empty_returns_none() -> None:
+    """An empty transcript (no speech) returns None (no task is run)."""
+    console = _capture_console()
+    assert intake._capture_voice(console, _StubVoiceObj("   "), "cyan") is None  # type: ignore[arg-type]
+
+
 def test_repl_interaction_ask_text(monkeypatch: pytest.MonkeyPatch) -> None:
     """ask_text shows the mid-research question and returns the user's free-form answer."""
     console = _capture_console()

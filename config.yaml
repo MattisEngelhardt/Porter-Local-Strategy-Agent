@@ -89,11 +89,15 @@ output:
     excel_negative: "#FFDDC1"          # Red-orange — negative/risk values
     excel_header: "#2D2D2D"            # Dark header rows
 
-voice:
-  enabled: false                       # Set true in Phase 5
-  model: "base"
-  language: "auto"
-  hotkey: "ctrl+space"
+voice:                                 # Phase 5 — local push-to-talk (faster-whisper + pyaudio)
+  enabled: false                       # true = Ctrl+Space dictation in the REPL (additive)
+  model: "base"                        # faster-whisper size: tiny|base|small|medium|large-v3
+  language: "auto"                     # "auto" | "de" | "en"
+  hotkey: "ctrl+space"                 # global hotkey to dictate into the prompt
+  sample_rate: 16000                   # 16 kHz mono — what Whisper expects
+  max_record_seconds: 12               # fixed capture window per press
+  compute_type: "int8"                 # CPU-friendly quantization
+  # device_index:                      # input device (unset = system default microphone)
 
 logging:
   level: "INFO"

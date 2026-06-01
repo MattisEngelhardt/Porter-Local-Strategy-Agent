@@ -182,12 +182,20 @@ class OutputConfig(BaseModel):
 
 
 class VoiceConfig(BaseModel):
-    """Voice-input parameters (enabled in Phase 5)."""
+    """Voice-input parameters (Phase 5). All local: faster-whisper + pyaudio + pynput.
+
+    ``enabled`` defaults False so the text REPL has zero hard dependency on the voice libs and
+    starts no hotkey thread unless the user opts in.
+    """
 
     enabled: bool = False
-    model: str = "base"
-    language: str = "auto"
+    model: str = "base"  # faster-whisper model size: tiny | base | small | medium | large-v3
+    language: str = "auto"  # "auto" | "de" | "en"
     hotkey: str = "ctrl+space"
+    sample_rate: int = Field(default=16000, gt=0)  # 16 kHz mono — what Whisper expects
+    max_record_seconds: int = Field(default=12, gt=0)  # fixed-duration capture per press
+    compute_type: str = "int8"  # CPU-friendly quantization for faster-whisper
+    device_index: int | None = None  # input device (None = system default microphone)
 
 
 class LoggingConfig(BaseModel):

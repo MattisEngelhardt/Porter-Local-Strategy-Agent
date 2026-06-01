@@ -27,6 +27,7 @@ from core.memory import MemoryStore, append_brain_additions
 from core.pdf_reader import PdfReadError, read_pdf
 from core.pipeline import resolve_memory, run_pipeline
 from core.researcher import SearXNGError
+from core.voice_input import VoiceError, VoiceInput, build_voice_input
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent
 from models.synthesis import PipelineResult
@@ -212,6 +213,21 @@ def run_repl(
         ),
     )
 
+    # Start voice input (Ctrl+Space) if enabled — additive; never blocks the text REPL.
+    voice = build_voice_input(config.voice)
+    if voice is not None:
+        try:
+            voice.start()  # hotkey records → transcribes → types the text into the prompt
+        except VoiceError as exc:
+            console.print(Panel(str(exc), title="voice off (additive)", border_style="yellow"))
+            voice = None
+
+    voice_line = (
+        "\nVoice: press [bold]Ctrl+Space[/bold] to dictate into the prompt, or type "
+        "[bold]/voice[/bold] to speak one task."
+        if voice is not None
+        else ""
+    )
     console.print(
         Panel(
             f"[bold]Porter[/bold] — your local strategy agent\n"
@@ -220,7 +236,8 @@ def run_repl(
             "analysis.\n"
             "Effort: prefix with [bold]/effort low|high|ultra[/bold] (alone = set the session "
             "default; auto-detected otherwise).\n"
-            "Or drop a file path (PDF / image / .xlsx) to read it.\n"
+            "Or drop a file path (PDF / image / .xlsx) to read it."
+            f"{voice_line}\n"
             "Type [bold]exit[/bold] to quit.",
             title="ready",
             border_style=accent,
@@ -229,37 +246,76 @@ def run_repl(
 
     session_effort: EffortLevel | None = None
 
-    while True:
-        try:
-            user_input = Prompt.ask("[bold]you[/bold]")
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]bye[/dim]")
-            return
+    try:
+        while True:
+            try:
+                user_input = Prompt.ask("[bold]you[/bold]")
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n[dim]bye[/dim]")
+                return
 
-        text = user_input.strip()
-        if not text:
-            continue
-        if text.lower() in EXIT_COMMANDS:
-            console.print("[dim]bye[/dim]")
-            return
+            text = user_input.strip()
+            if not text:
+                continue
+            if text.lower() in EXIT_COMMANDS:
+                console.print("[dim]bye[/dim]")
+                return
 
-        override, stripped = parse_effort_override(text)
-        if override is not None and not stripped:
-            # "/effort ultra" with no task → set the session default effort.
-            session_effort = override
-            console.print(
-                f"[dim]effort set to [bold]{override.value}[/bold] for this session[/dim]"
+            if text.lower() in {"/voice", "/v"}:
+                spoken = _capture_voice(console, voice, accent)
+                if not spoken:
+                    continue
+                text = spoken
+                console.print(f"[dim]heard:[/dim] {text}")
+
+            override, stripped = parse_effort_override(text)
+            if override is not None and not stripped:
+                # "/effort ultra" with no task → set the session default effort.
+                session_effort = override
+                console.print(
+                    f"[dim]effort set to [bold]{override.value}[/bold] for this session[/dim]"
+                )
+                continue
+            if override is not None:
+                text = stripped
+
+            document = detect_file_path(text)
+            if document is not None:
+                _handle_document(client, console, document, accent)
+                continue
+
+            _handle_task(client, config, console, text, accent, override or session_effort, memory)
+    finally:
+        if voice is not None:
+            voice.stop()
+
+
+def _capture_voice(console: Console, voice: VoiceInput | None, accent: str) -> str | None:
+    """Record one spoken task via the ``/voice`` command; return the transcript or ``None``.
+
+    With voice disabled, prints how to enable it. A capture/transcription failure is shown (with
+    its exact fix) and returns ``None`` — the text REPL is never broken.
+    """
+    if voice is None:
+        console.print(
+            Panel(
+                "Voice is off. Enable it: set [bold]voice.enabled: true[/bold] in config.yaml "
+                "and install the voice deps (pyaudio, faster-whisper, pynput).",
+                title="voice",
+                border_style="yellow",
             )
-            continue
-        if override is not None:
-            text = stripped
-
-        document = detect_file_path(text)
-        if document is not None:
-            _handle_document(client, console, document, accent)
-            continue
-
-        _handle_task(client, config, console, text, accent, override or session_effort, memory)
+        )
+        return None
+    try:
+        with console.status("[dim]listening… speak now[/dim]", spinner="dots"):
+            text = voice.capture_once().strip()
+    except VoiceError as exc:
+        console.print(Panel(str(exc), title="voice error", border_style="red"))
+        return None
+    if not text:
+        console.print("[dim](no speech detected)[/dim]")
+        return None
+    return text
 
 
 def _handle_document(client: LocalLLMClient, console: Console, path: Path, accent: str) -> None:
