@@ -26,7 +26,7 @@ from core.config import AppConfig, load_config
 from core.excel_reader import ExcelReadError
 from core.intake import read_document, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
-from core.pipeline import AutoInteraction, run_pipeline
+from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -201,6 +201,13 @@ def analyze(
 
     try:
         check_searxng(config)
+        memory = resolve_memory(
+            config,
+            client,
+            on_unavailable=lambda msg: console.print(
+                Panel(msg, title="memory off (advisory)", border_style="yellow")
+            ),
+        )
         with console.status("[dim]analyzing…[/dim]", spinner="dots"):
             result = run_pipeline(
                 client,
@@ -208,6 +215,7 @@ def analyze(
                 TaskRequest(raw_input=task_text),
                 AutoInteraction(),
                 effort_override=effort,
+                memory=memory,
             )
     except StartupError as exc:
         console.print(Panel(str(exc), title="startup check failed", border_style="red"))

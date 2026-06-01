@@ -23,8 +23,9 @@ from rich.prompt import Confirm, Prompt
 from core.config import AppConfig
 from core.excel_reader import ExcelReadError, read_excel
 from core.intent_parser import parse_effort_override
+from core.memory import MemoryStore, append_brain_additions
 from core.pdf_reader import PdfReadError, read_pdf
-from core.pipeline import run_pipeline
+from core.pipeline import resolve_memory, run_pipeline
 from core.researcher import SearXNGError
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent
@@ -135,6 +136,10 @@ def render_result(console: Console, result: PipelineResult, accent: str) -> None
             border_style=accent,
         )
     )
+    if result.delta_note:
+        console.print(
+            Panel(Markdown(result.delta_note), title="memory · delta", border_style=accent)
+        )
     for section in analysis.sections:
         console.print(
             Panel(Markdown(section.body or "—"), title=section.heading, border_style=accent)
@@ -198,6 +203,15 @@ def run_repl(
     console = console or Console()
     accent = config.output.colors.accent_cyan
 
+    # Open persistent memory once for the session (advisory — None if disabled/unavailable).
+    memory = resolve_memory(
+        config,
+        client,
+        on_unavailable=lambda msg: console.print(
+            Panel(msg, title="memory off (advisory)", border_style="yellow")
+        ),
+    )
+
     console.print(
         Panel(
             f"[bold]Porter[/bold] — your local strategy agent\n"
@@ -245,8 +259,7 @@ def run_repl(
             _handle_document(client, console, document, accent)
             continue
 
-        # TODO(Phase 5): voice input via Ctrl+Space overlay -> inject transcript here.
-        _handle_task(client, config, console, text, accent, override or session_effort)
+        _handle_task(client, config, console, text, accent, override or session_effort, memory)
 
 
 def _handle_document(client: LocalLLMClient, console: Console, path: Path, accent: str) -> None:
@@ -267,6 +280,7 @@ def _handle_task(
     text: str,
     accent: str,
     effort_override: EffortLevel | None = None,
+    memory: MemoryStore | None = None,
 ) -> None:
     """Run the full agent pipeline for a free-text task and render the result."""
     interaction = ReplInteraction(console, accent)
@@ -277,6 +291,7 @@ def _handle_task(
             TaskRequest(raw_input=text),
             interaction,
             effort_override=effort_override,
+            memory=memory,
         )
     except SearXNGError as exc:
         console.print(Panel(str(exc), title="research failed", border_style="red"))
@@ -285,3 +300,30 @@ def _handle_task(
         console.print(Panel(str(exc), title="LLM error", border_style="red"))
         return
     render_result(console, result, accent)
+    _maybe_update_brain(console, config, result, accent)
+
+
+def _maybe_update_brain(
+    console: Console, config: AppConfig, result: PipelineResult, accent: str
+) -> None:
+    """Show agent-proposed brain.md additions; append the user-confirmed ones ([y/N], default No).
+
+    The brain-update flow (SPEC §4.5/§15): the agent proposes durable, high-signal additions; the
+    user confirms before anything is written (brain.md is confidential and local-only, N-9).
+    """
+    additions = result.proposed_brain_additions
+    if not additions:
+        return
+    body = "\n".join(f"  • {addition}" for addition in additions)
+    console.print(
+        Panel(
+            f"The agent suggests adding these durable notes to brain.md:\n\n{body}",
+            title="brain.md update (persistent memory)",
+            border_style=accent,
+        )
+    )
+    if Confirm.ask("[bold]Add these to brain.md?[/bold]", default=False):
+        written = append_brain_additions(config.memory, additions)
+        console.print(f"[dim]added {written} line(s) to {config.memory.brain_path}[/dim]")
+    else:
+        console.print("[dim]skipped — brain.md unchanged[/dim]")

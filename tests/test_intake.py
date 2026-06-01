@@ -9,6 +9,7 @@ import pytest
 from rich.console import Console
 
 import core.intake as intake
+from core.config import AppConfig
 from core.intake import ReplInteraction, detect_file_path, read_document, render_result
 from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, Section, SourceRef
@@ -159,6 +160,64 @@ def test_repl_interaction_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
     """confirm delegates to rich Confirm and returns its boolean."""
     monkeypatch.setattr(intake.Confirm, "ask", lambda *a, **k: False)
     assert ReplInteraction(_capture_console(), "cyan").confirm("Go?") is False
+
+
+def test_render_result_shows_delta_note() -> None:
+    """A memory delta note renders as its own panel above the sections."""
+    console = _capture_console()
+    result = PipelineResult(
+        intent=_intent(),
+        routed_formats=[OutputFormat.BRIEF],
+        analysis=AnalysisOutput(title="T", language=Language.EN, bottom_line="bl"),
+        delta_note="Since our last analysis of Figure AI (2026-05-11, 3 weeks ago): up.",
+    )
+    render_result(console, result, "cyan")
+    out = console.file.getvalue()  # type: ignore[attr-defined]
+    assert "Since our last analysis of Figure AI" in out
+    assert "delta" in out
+
+
+def _brain_config(tmp_path: Path) -> AppConfig:
+    config = AppConfig()
+    config.memory.brain_path = str(tmp_path / "brain.md")
+    return config
+
+
+def test_maybe_update_brain_appends_on_confirm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirming [y] appends the proposed additions to brain.md."""
+    config = _brain_config(tmp_path)
+    result = PipelineResult(
+        intent=_intent(), proposed_brain_additions=["Board decks: English only"]
+    )
+    monkeypatch.setattr(intake.Confirm, "ask", lambda *a, **k: True)
+    intake._maybe_update_brain(_capture_console(), config, result, "cyan")
+    text = Path(config.memory.brain_path).read_text(encoding="utf-8")
+    assert "Board decks: English only" in text
+
+
+def test_maybe_update_brain_skips_on_decline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Declining [N] leaves brain.md untouched (default is No)."""
+    config = _brain_config(tmp_path)
+    result = PipelineResult(intent=_intent(), proposed_brain_additions=["X"])
+    monkeypatch.setattr(intake.Confirm, "ask", lambda *a, **k: False)
+    intake._maybe_update_brain(_capture_console(), config, result, "cyan")
+    assert not Path(config.memory.brain_path).exists()
+
+
+def test_maybe_update_brain_noop_without_proposals(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no proposals, the user is never prompted and nothing is written."""
+    asked: list[bool] = []
+    monkeypatch.setattr(intake.Confirm, "ask", lambda *a, **k: asked.append(True) or True)
+    config = _brain_config(tmp_path)
+    intake._maybe_update_brain(_capture_console(), config, PipelineResult(intent=_intent()), "cyan")
+    assert asked == []
+    assert not Path(config.memory.brain_path).exists()
 
 
 def test_repl_interaction_ask_text(monkeypatch: pytest.MonkeyPatch) -> None:

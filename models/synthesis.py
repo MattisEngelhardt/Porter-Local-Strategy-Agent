@@ -96,3 +96,7 @@ class PipelineResult(BaseModel):
     mode: str = "research"  # "research" | "document_prep" (Phase 3.5)
     artifact_path: Path | None = None  # the written .md blueprint (document-prep mode)
     output_files: list[Path] = Field(default_factory=list)  # rendered deliverables (.pptx/.pdf)
+    delta_note: str | None = None  # "Since our last analysis of X …" from ChromaDB memory (Phase 5)
+    proposed_brain_additions: list[str] = Field(
+        default_factory=list
+    )  # high-signal brain.md additions awaiting [y/N] confirm in the REPL (Phase 5)

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from core.config import AppConfig
+from core.memory import MemoryLayerError, MemoryRecord
 from core.pipeline import AutoInteraction, plan_subqueries, run_pipeline
 from models.research import (
     Confidence,
@@ -34,16 +35,24 @@ class _ScriptedClient:
         analysis: str = "{}",
         quick: str = "QUICK",
         critiques: list[str] | None = None,
+        entities: str = "[]",
+        delta: str = "DELTA-BODY",
+        propose: str = "[]",
     ) -> None:
         self.intent = intent
         self.subqueries = subqueries
         self.analysis = analysis
         self.quick = quick
         self._critiques = list(critiques or [_PASS_CRITIQUE])
+        self.entities = entities
+        self.delta = delta
+        self.propose = propose
         self.systems: list[str] = []
+        self.prompts: list[str] = []
 
     def generate(self, prompt: str, system: str = "", use_thinking: Any = None, **kw: Any) -> str:
         self.systems.append(system)
+        self.prompts.append(prompt)
         lowered = system.lower()
         if "intent classifier" in lowered:
             return self.intent
@@ -52,9 +61,18 @@ class _ScriptedClient:
             return self._critiques.pop(0) if len(self._critiques) > 1 else self._critiques[0]
         if "decompose" in lowered:
             return self.subqueries
+        if "named entities" in lowered:
+            return self.entities
+        if "compare a prior analysis" in lowered or "vergleichst" in lowered:
+            return self.delta
+        if "maintain brain.md" in lowered:
+            return self.propose
         if "senior strategy analyst" in lowered:
             return self.analysis
         return self.quick
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [[float(len(t) % 7), 1.0, 0.0] for t in texts]
 
 
 class _FakeManager:
@@ -274,6 +292,101 @@ def test_run_pipeline_critique_triggers_revision(tmp_path: Path) -> None:
     assert result.revisions == 1
     assert result.critique is not None and result.critique.passed
     assert result.critique.score == 90
+
+
+class _FakeMemoryStore:
+    """Records writes and returns canned priors (duck-typed for the real ``recall`` function)."""
+
+    def __init__(self, priors: list[MemoryRecord]) -> None:
+        self._priors = priors
+        self.written: list[MemoryRecord] = []
+
+    def retrieve(self, query_text: str, top_k: int | None = None) -> list[MemoryRecord]:
+        return list(self._priors)
+
+    def write(self, record: MemoryRecord) -> None:
+        self.written.append(record)
+
+
+class _BrokenMemoryStore:
+    """A store that fails on every op — exercises the fail-open path (never blocks delivery)."""
+
+    def retrieve(self, query_text: str, top_k: int | None = None) -> list[MemoryRecord]:
+        raise MemoryLayerError("boom")
+
+    def write(self, record: MemoryRecord) -> None:
+        raise MemoryLayerError("boom")
+
+
+def _prior_record() -> MemoryRecord:
+    return MemoryRecord(
+        record_id="r1",
+        document="1X Technologies raised $100M in early 2025; focused on consumer humanoids.",
+        title="1X Brief",
+        entities=["1X Technologies"],
+        task_type="competitor_analysis",
+        language="en",
+        timestamp="2026-05-11",
+        quality_score=88,
+    )
+
+
+def test_run_pipeline_memory_delta_inject_and_write(tmp_path: Path) -> None:
+    """Memory: a same-entity prior drives a delta, injects priors, and the run is written."""
+    client = _ScriptedClient(
+        intent='{"task_type":"competitor_analysis","depth":"standard","audience":"strategy_team","summary":"Analyze 1X"}',  # noqa: E501
+        subqueries='["1X funding"]',
+        analysis='{"title":"1X Brief","bottom_line":"BL","sections":[{"heading":"Funding","body":"x"}],"sources":[{"url":"https://reuters.com/a","tier":"tier_1"}]}',  # noqa: E501
+        entities='["1X Technologies"]',
+        delta="Funding doubled and a Tier-1 customer signed since the last analysis.",
+        propose='["1X Technologies is a high-priority watch target"]',
+    )
+    store = _FakeMemoryStore([_prior_record()])
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        _config(tmp_path),
+        TaskRequest(raw_input="Analyze 1X Technologies"),
+        AutoInteraction(),
+        manager=_FakeManager(_report()),  # type: ignore[arg-type]
+        memory=store,  # type: ignore[arg-type]
+    )
+    # Delta surfaced, naming the entity + the prior date.
+    assert result.delta_note is not None
+    assert result.delta_note.startswith("Since our last analysis of 1X Technologies")
+    assert "2026-05-11" in result.delta_note
+    assert "Funding doubled" in result.delta_note
+    # Prior findings reached synthesis (injected into the user prompt).
+    synth_prompts = [
+        p
+        for p, s in zip(client.prompts, client.systems, strict=True)
+        if "senior strategy analyst" in s.lower()
+    ]  # noqa: E501
+    assert synth_prompts and "PRIOR FINDINGS" in synth_prompts[0]
+    # The run was written to memory with its entities + a quality score.
+    assert len(store.written) == 1
+    assert store.written[0].entities == ["1X Technologies"]
+    assert store.written[0].quality_score == 90  # passing critique score
+    # Brain-update proposals surfaced for the REPL to confirm.
+    assert result.proposed_brain_additions == ["1X Technologies is a high-priority watch target"]
+
+
+def test_run_pipeline_memory_fail_open(tmp_path: Path) -> None:
+    """A broken memory store never blocks delivery — the analysis still ships, delta is None."""
+    client = _ScriptedClient(
+        intent='{"task_type":"competitor_analysis","depth":"standard","audience":null,"summary":"x"}',
+        subqueries='["a"]',
+        analysis='{"title":"t","bottom_line":"b","sections":[{"heading":"h","body":"x"}],"sources":[{"url":"https://reuters.com/a"}]}',  # noqa: E501
+    )
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        _config(tmp_path),
+        TaskRequest(raw_input="Analyze 1X Technologies"),
+        AutoInteraction(),
+        manager=_FakeManager(_report()),  # type: ignore[arg-type]
+        memory=_BrokenMemoryStore(),  # type: ignore[arg-type]
+    )
+    assert result.analysis is not None  # delivered despite the broken store
+    assert result.delta_note is None
 
 
 def test_auto_interaction_ask_text() -> None:

@@ -22,6 +22,7 @@ headless :class:`AutoInteraction` here. This module imports no presentation libr
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
@@ -39,7 +40,16 @@ from core.excel_builder import ExcelBuildError, build_workbook
 from core.exporter import ExportError, build_brief_pdf, build_deck
 from core.intent_parser import classify_work_mode, parse_intent
 from core.json_utils import extract_json_array
-from core.memory import load_brain
+from core.memory import (
+    MemoryLayerError,
+    MemoryStore,
+    extract_entities,
+    load_brain,
+    make_record,
+    open_memory,
+    propose_brain_additions,
+    recall,
+)
 from core.playbooks import load_playbooks
 from core.research_agent import ResearchManager
 from core.synthesizer import quality_check, synthesize
@@ -423,6 +433,34 @@ def _run_document_prep(
     )
 
 
+def resolve_memory(
+    config: AppConfig,
+    client: LocalLLMClient,
+    on_unavailable: Callable[[str], None] | None = None,
+) -> MemoryStore | None:
+    """Open the ChromaDB memory store, or return ``None`` (memory is advisory — never blocks).
+
+    A disabled config yields ``None`` silently. A real failure (ChromaDB missing / path unusable)
+    yields ``None`` but surfaces the exact fix via ``on_unavailable`` so it is never a silent
+    degrade (SPEC REQ-5). Callers (REPL / CLI) open it once and pass it into :func:`run_pipeline`.
+    """
+    if not config.memory.enabled:
+        return None
+    try:
+        return open_memory(config.memory, client)
+    except MemoryLayerError as exc:
+        if on_unavailable is not None:
+            on_unavailable(str(exc))
+        return None
+
+
+def _quality_score(analysis: AnalysisOutput, critique_result: Critique | None) -> int:
+    """Quality rating stored with a run: the critic's score, else a deterministic floor proxy."""
+    if critique_result is not None:
+        return critique_result.score
+    return max(0, 100 - 25 * len(quality_check(analysis)))
+
+
 def run_pipeline(
     client: LocalLLMClient,
     config: AppConfig,
@@ -432,6 +470,7 @@ def run_pipeline(
     documents: list[DocContent] | None = None,
     effort_override: EffortLevel | None = None,
     doc_formats: list[OutputFormat] | None = None,
+    memory: MemoryStore | None = None,
 ) -> PipelineResult:
     """Run the full advanced agent loop for one task (SPEC §5.3 + §15.5).
 
@@ -443,6 +482,9 @@ def run_pipeline(
         manager: Optional research manager (tests inject a stub; otherwise built from config).
         documents: Optional already-read documents to feed into synthesis.
         effort_override: An explicit effort (``/effort`` / ``--effort``) that beats auto-detect.
+        memory: Optional ChromaDB memory store (from :func:`resolve_memory`). When present, prior
+            findings are retrieved before synthesis (delta injected) and the run is written after
+            delivery. ``None`` = memory off (the default; advisory layer, never blocks).
 
     Returns:
         A :class:`PipelineResult` — either a full ``analysis`` (with effort/critique/revisions/
@@ -491,12 +533,29 @@ def run_pipeline(
             )
 
     report = _run_research(client, config, intent, plan, interaction, effort_cfg, manager)
+    findings_digest = _findings_digest(report)
+
+    # SPEC §5.3 step 6 — retrieve relevant prior research + inject the delta (fail-open).
+    prior_findings, delta_note, entities = "", None, []
+    if memory is not None:
+        try:
+            entities = extract_entities(client, intent, task.raw_input)
+            prior = recall(memory, client, intent, entities, findings_digest)
+            prior_findings, delta_note = prior.prior_findings, prior.delta_note
+            if delta_note:
+                interaction.notify(delta_note)
+        except MemoryLayerError as exc:
+            interaction.notify(_t(intent.language, f"Memory aus: {exc}", f"Memory off: {exc}"))
+            memory = None
+
+    injected_prior = f"{delta_note}\n\n{prior_findings}".strip() if delta_note else prior_findings
     synthesis_input = SynthesisInput(
         intent=intent,
         research=report.evidence,
         documents=documents or [],
         brain_context=brain,
-        findings_digest=_findings_digest(report),
+        findings_digest=findings_digest,
+        prior_findings=injected_prior,
     )
     analysis = synthesize(client, synthesis_input)
 
@@ -517,6 +576,24 @@ def run_pipeline(
     # Render the routed deliverables (PDF / PPTX / Excel) — Business Case = Deck + Excel (N-6).
     output_files = _render_outputs(client, config, intent, analysis, interaction, effort_cfg)
 
+    # SPEC §5.3 / §15 — write this run to memory after delivery (fail-open).
+    if memory is not None:
+        try:
+            memory.write(make_record(intent, analysis, entities, _quality_score(analysis, crit)))
+        except MemoryLayerError as exc:
+            interaction.notify(
+                _t(
+                    intent.language,
+                    f"Memory-Write übersprungen: {exc}",
+                    f"Memory write skipped: {exc}",
+                )
+            )
+
+    # Brain-update flow (SPEC §4.5/§15): propose durable additions; the REPL confirms + appends.
+    proposed: list[str] = []
+    if config.memory.enabled and intent.effort != EffortLevel.LOW:
+        proposed = propose_brain_additions(client, intent, analysis, brain)
+
     return PipelineResult(
         intent=intent,
         routed_formats=intent.output_formats,
@@ -528,4 +605,6 @@ def run_pipeline(
         revisions=revisions,
         research_report=report,
         output_files=output_files,
+        delta_note=delta_note,
+        proposed_brain_additions=proposed,
     )
