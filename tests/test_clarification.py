@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from core.clarification import clarify, question_budget
+from core.clarification import clarify, propose_scoping_questions, question_budget
+from llm.local_llm_client import LLMError
 from models.task import Audience, Depth, Intent, Language, OutputFormat, TaskRequest, TaskType
 
 
@@ -126,3 +127,65 @@ def test_default_to_first_option_on_unmatched_answer() -> None:
     assert out.output_formats == [OutputFormat.BRIEF]
     assert out.audience == Audience.PERSONAL
     assert len(answered) == 1
+
+
+# ------------------------------------------ situation-specific scoping questions
+class _FakeLLM:
+    """A minimal scripted LLM client; records calls and replays one canned response (or raises)."""
+
+    def __init__(self, response: str = "[]", *, fail: bool = False) -> None:
+        self._response = response
+        self._fail = fail
+        self.calls: list[tuple[str, str]] = []
+
+    def generate(
+        self, prompt: str, system: str = "", use_thinking: object = None, **kw: object
+    ) -> str:
+        self.calls.append((prompt, system))
+        if self._fail:
+            raise LLMError("backend down")
+        return self._response
+
+
+def test_propose_scoping_questions_situational_and_capped() -> None:
+    """The agent reads the real task and returns task-specific questions, capped at the budget."""
+    intent = _intent(TaskType.COMPETITOR_ANALYSIS, [OutputFormat.BRIEF], summary="Assess Figure AI")
+    client = _FakeLLM('["Tech moat or commercial traction?", "Which time horizon?", "Third?"]')
+    questions = propose_scoping_questions(
+        client, intent, TaskRequest(raw_input="Assess Figure AI as a competitor"), "", 2
+    )
+    assert questions == ["Tech moat or commercial traction?", "Which time horizon?"]  # capped at 2
+    # The prompt carried the actual task text, so the model can be situation-specific (not generic).
+    assert "Assess Figure AI as a competitor" in client.calls[0][0]
+
+
+def test_propose_scoping_questions_zero_budget_skips_llm() -> None:
+    """A zero budget asks nothing and never calls the LLM (low effort / no room left)."""
+    client = _FakeLLM('["x"]')
+    questions = propose_scoping_questions(
+        client, _intent(TaskType.ADHOC, [OutputFormat.BRIEF]), TaskRequest(raw_input="hi"), "", 0
+    )
+    assert questions == []
+    assert client.calls == []
+
+
+def test_propose_scoping_questions_fail_open() -> None:
+    """An LLM error yields no questions — the run proceeds on routing answers alone."""
+    client = _FakeLLM(fail=True)
+    questions = propose_scoping_questions(
+        client, _intent(TaskType.MARKET_ANALYSIS, [OutputFormat.BRIEF]),
+        TaskRequest(raw_input="market"), "", 2,
+    )
+    assert questions == []
+
+
+def test_propose_scoping_questions_uses_language_and_brain() -> None:
+    """German intent → ask in German; brain.md is injected so it won't re-ask the already-known."""
+    intent = _intent(TaskType.MARKET_ANALYSIS, [OutputFormat.BRIEF], language=Language.DE)
+    client = _FakeLLM("[]")
+    propose_scoping_questions(
+        client, intent, TaskRequest(raw_input="Marktanalyse"), "Neura ist pre-IPO.", 2
+    )
+    prompt, system = client.calls[0]
+    assert "German" in system  # asks in the user's language
+    assert "Neura ist pre-IPO." in prompt  # persistent context injected to avoid re-asking
