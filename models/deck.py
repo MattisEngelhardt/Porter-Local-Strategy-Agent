@@ -10,6 +10,7 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 
 from models.task import Audience, Language
+from models.visuals import ChartSpec
 
 
 class SlideType(StrEnum):
@@ -36,6 +37,7 @@ class SlideContent(BaseModel):
     body: str | None = None
     table: list[list[str]] | None = None  # row-major; row 0 = header
     notes: str | None = None  # speaker notes
+    visual: ChartSpec | None = None  # optional data chart for this slide (Editorial visual engine)
 
 
 class DeckStructure(BaseModel):

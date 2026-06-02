@@ -26,7 +26,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
-from core.clarification import clarify
+from core.clarification import clarify, propose_scoping_questions
 from core.config import AppConfig, EffortLevelConfig
 from core.content_shaper import shape_deck, shape_workbook
 from core.critic import critique, revise
@@ -53,7 +53,7 @@ from core.memory import (
 )
 from core.playbooks import load_playbooks
 from core.research_agent import ResearchManager
-from core.synthesizer import quality_check, synthesize
+from core.synthesizer import compile_cited_sources, quality_check, synthesize
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent, ResearchReport
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, SynthesisInput
@@ -172,18 +172,31 @@ def _plan_summary(intent: Intent, effort_cfg: EffortLevelConfig) -> str:
 
 
 def plan_subqueries(
-    client: LocalLLMClient, config: AppConfig, intent: Intent, task: TaskRequest
+    client: LocalLLMClient,
+    config: AppConfig,
+    intent: Intent,
+    task: TaskRequest,
+    guidance: str = "",
 ) -> ResearchPlan:
     """Build the confirm summary + fallback sub-queries for the research manager (SPEC §5.3/§15.5).
 
     The manager owns the real decomposition; these 3-5 sub-queries are its fallback (used if its
-    own decomposition fails) and the basis of the plan the user confirms. Falls back to the raw
-    task as a single query if the LLM fails or returns nothing.
+    own decomposition fails) and the basis of the plan the user confirms. ``guidance`` carries the
+    user's answers to the situation-specific scoping questions, so the decomposition is steered by
+    what the user actually cares about. Falls back to the raw task as a single query if the LLM
+    fails or returns nothing.
     """
     sub_questions: list[str] = []
+    guidance_block = (
+        f"\nUser guidance (answers to scoping questions — focus the sub-queries on these):\n"
+        f"{guidance.strip()}\n"
+        if guidance.strip()
+        else ""
+    )
     try:
         response = client.generate(
-            f'Task: "{task.raw_input}"\nReturn the JSON array of 3-5 sub-queries now.',
+            f'Task: "{task.raw_input}"{guidance_block}\n'
+            "Return the JSON array of 3-5 sub-queries now.",
             system=_SUBQ_SYSTEM,
             use_thinking=False,
         )
@@ -198,6 +211,26 @@ def plan_subqueries(
 
     summary = _plan_summary(intent, config.effort.level_for(intent.effort))
     return ResearchPlan(sub_questions=sub_questions, summary=summary)
+
+
+def _ask_questions(
+    interaction: Interaction, questions: list[str]
+) -> tuple[str, list[ClarificationRound]]:
+    """Ask each free-form question one at a time; return (guidance, answered rounds).
+
+    Shared by the research-path scoping intake and the document-prep clarifications. Every question
+    is recorded as a round; only answered ones contribute to the guidance string. An empty answer
+    means "no answer" — the caller proceeds on a stated assumption (clarification never blocks
+    delivery, SPEC §5.2).
+    """
+    rounds: list[ClarificationRound] = []
+    parts: list[str] = []
+    for question in questions:
+        answer = interaction.ask_text(question).strip()
+        rounds.append(ClarificationRound(question=question, answer=answer or None))
+        if answer:
+            parts.append(f"Q: {question}\nA: {answer}")
+    return "\n\n".join(parts), rounds
 
 
 def _quick_answer(client: LocalLLMClient, task: TaskRequest, brain: str, intent: Intent) -> str:
@@ -398,14 +431,8 @@ def _run_document_prep(
     # Targeted, theme-specific clarifications (effort-budgeted; fail-open via empty answers).
     effort_cfg = config.effort.level_for(intent.effort)
     budget = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
-    answered: list[ClarificationRound] = []
-    guidance_parts: list[str] = []
-    for question in propose_doc_questions(client, intent, documents, budget):
-        answer = interaction.ask_text(question).strip()
-        answered.append(ClarificationRound(question=question, answer=answer or None))
-        if answer:
-            guidance_parts.append(f"Q: {question}\nA: {answer}")
-    guidance = "\n\n".join(guidance_parts)
+    questions = propose_doc_questions(client, intent, documents, budget)
+    guidance, answered = _ask_questions(interaction, questions)
     if guidance:
         interaction.notify(
             _t(
@@ -510,8 +537,26 @@ def run_pipeline(
     effort_cfg = config.effort.level_for(intent.effort)
     # Upfront clarification budget = the smaller of the agent ceiling and the effort allowance.
     max_clarifications = min(config.agent.max_clarification_rounds, effort_cfg.max_clarifications)
-    intent, answered = clarify(intent, task, interaction.ask_choice, max_clarifications)
-    plan = plan_subqueries(client, config, intent, task)
+
+    # Intake (SPEC §5.2): proactive comprehension, not a fixed checklist. Reflect the understood
+    # task, then run a genuine sufficiency self-check — the agent asks itself whether it already
+    # has enough to go in, and surfaces ONLY the situation-specific blockers it truly needs (often
+    # nothing). Output format is deterministic and is confirmed at the plan step below, so the
+    # canned format/audience triple is a fallback that fires ONLY when the self-check asked nothing
+    # — the user is never handed a generic checklist on top of a sharp, task-specific question.
+    if intent.summary:
+        interaction.notify(
+            _t(intent.language, f"Verstanden: {intent.summary}", f"Got it: {intent.summary}")
+        )
+    scoping_questions = propose_scoping_questions(client, intent, task, brain, max_clarifications)
+    guidance, scoping_rounds = _ask_questions(interaction, scoping_questions)
+
+    routing_rounds: list[ClarificationRound] = []
+    if not scoping_rounds:
+        intent, routing_rounds = clarify(intent, task, interaction.ask_choice, max_clarifications)
+    answered = scoping_rounds + routing_rounds
+
+    plan = plan_subqueries(client, config, intent, task, guidance)
 
     confirmed = interaction.confirm(plan.summary) if config.agent.show_research_plan else True
     if not confirmed:
@@ -557,6 +602,8 @@ def run_pipeline(
         brain_context=brain,
         findings_digest=findings_digest,
         prior_findings=injected_prior,
+        cited_sources=compile_cited_sources(report),
+        guidance=guidance,
     )
     analysis = synthesize(client, synthesis_input)
 

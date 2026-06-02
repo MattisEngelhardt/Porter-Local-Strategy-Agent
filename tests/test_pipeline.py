@@ -38,6 +38,7 @@ class _ScriptedClient:
         entities: str = "[]",
         delta: str = "DELTA-BODY",
         propose: str = "[]",
+        scoping: str = "[]",
     ) -> None:
         self.intent = intent
         self.subqueries = subqueries
@@ -47,6 +48,7 @@ class _ScriptedClient:
         self.entities = entities
         self.delta = delta
         self.propose = propose
+        self.scoping = scoping
         self.systems: list[str] = []
         self.prompts: list[str] = []
 
@@ -67,6 +69,8 @@ class _ScriptedClient:
             return self.delta
         if "maintain brain.md" in lowered:
             return self.propose
+        if "intake strategist" in lowered:
+            return self.scoping
         if "senior strategy analyst" in lowered:
             return self.analysis
         return self.quick
@@ -168,6 +172,59 @@ def test_run_pipeline_full_analysis(tmp_path: Path) -> None:
     assert result.research_report.workers_used == 3
     assert result.critique is not None and result.critique.passed
     assert result.revisions == 0
+
+
+def test_run_pipeline_scoping_guidance_shapes_research_and_synthesis(tmp_path: Path) -> None:
+    """A situation-specific scoping question is asked; its answer steers research AND synthesis."""
+    client = _ScriptedClient(
+        intent='{"task_type":"competitor_analysis","depth":"standard","audience":"strategy_team","summary":"Assess Figure AI"}',  # noqa: E501
+        subqueries='["Figure AI commercial traction"]',
+        analysis='{"title":"Figure","bottom_line":"BL","sections":[{"heading":"h","body":"x"}],"sources":[{"url":"https://reuters.com/a"}]}',  # noqa: E501
+        scoping='["For Figure AI, does the tech moat or the commercial traction matter more?"]',
+    )
+    interaction = AutoInteraction(text_answers=["commercial traction and the BMW deal"])
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        _config(tmp_path),
+        TaskRequest(raw_input="Assess Figure AI as a competitor"),
+        interaction,
+        manager=_FakeManager(_report()),  # type: ignore[arg-type]
+    )
+    # The generated, task-specific question was asked and recorded with the user's answer — and the
+    # generic format/audience triple was suppressed (no checklist piled on top of the sharp one).
+    assert len(result.answered) == 1
+    assert "Figure AI" in (result.answered[0].question or "")
+    assert result.answered[0].answer == "commercial traction and the BMW deal"
+    # The guidance reached BOTH the sub-query planner and the synthesizer's user prompt.
+    subq_prompts = [p for p in client.prompts if "sub-queries" in p]
+    assert subq_prompts and "commercial traction and the BMW deal" in subq_prompts[0]
+    synth_prompts = [
+        p
+        for p, s in zip(client.prompts, client.systems, strict=True)
+        if "senior strategy analyst" in s.lower()
+    ]
+    assert synth_prompts and "commercial traction and the BMW deal" in synth_prompts[0]
+
+
+def test_run_pipeline_routing_fallback_when_self_check_is_silent(tmp_path: Path) -> None:
+    """When the self-check has enough context (asks nothing), the format/audience triple still runs
+    as a fallback so packaging is never left unresolved."""
+    client = _ScriptedClient(
+        intent='{"task_type":"competitor_analysis","depth":"standard","audience":null,"summary":"x"}',
+        subqueries='["a"]',
+        analysis='{"title":"t","bottom_line":"b","sections":[{"heading":"h","body":"x"}],"sources":[{"url":"https://reuters.com/a"}]}',  # noqa: E501
+        scoping="[]",  # self-check decides it already has enough → asks nothing
+    )
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        _config(tmp_path),
+        TaskRequest(raw_input="Analyze Figure AI"),  # no explicit format keyword
+        AutoInteraction(),  # ask_choice → first scope option (Quick brief)
+        manager=_FakeManager(_report()),  # type: ignore[arg-type]
+    )
+    # The fallback triple fired (exactly one routing round) and resolved packaging to a brief.
+    assert len(result.answered) == 1
+    assert result.routed_formats == [OutputFormat.BRIEF]
 
 
 def test_run_pipeline_business_case_dual_output(tmp_path: Path) -> None:

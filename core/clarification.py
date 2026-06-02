@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.intent_parser import detect_explicit_formats
+from core.json_utils import extract_json_array
+from llm.local_llm_client import LLMError, LocalLLMClient
 from models.task import (
     Audience,
     ClarificationRound,
@@ -260,3 +262,61 @@ def clarify(
         asked.add(question.kind)
 
     return intent, answered
+
+
+# --- situation-specific scoping (the research-path counterpart of propose_doc_questions) -----
+# Unlike the fixed routing catalog above, these questions are generated per task: the agent reads
+# the actual request + brain.md and asks only what genuinely shapes THIS analysis. This is what
+# makes the intake read like comprehension instead of a keyword checklist.
+_SCOPING_SYSTEM = (
+    "You are the intake strategist of a local strategy/research agent at Neura Robotics (pre-IPO "
+    "cognitive humanoid robotics, Metzingen, Germany). A task just arrived. Before any research, "
+    "judge ONE thing: do you already have enough context to produce an excellent, decision-ready "
+    "analysis? If yes, ask nothing. If not, surface ONLY the question(s) whose answers would "
+    "genuinely change HOW you research this or WHAT you conclude — the real decision behind the "
+    "request, scope boundaries, which angle / rivals / region / time-horizon / metrics matter "
+    "most, and any hard constraints. RULES: (1) never ask to fill a quota — a well-specified task "
+    "needs ZERO questions, and [] is the correct, expected answer for it; (2) ask only what "
+    "materially changes the result AND is not already clear from the task or the persistent "
+    "context below; (3) never ask about output format, length, or audience — those are decided "
+    "elsewhere; (4) name the actual company / market / decision so the question could not be "
+    "copy-pasted onto any other task; (5) one sharp question beats several shallow ones. Respond "
+    "with ONLY a JSON array of question strings (at most {n}, or [] when you already have enough) "
+    "— no prose."
+)
+
+
+def propose_scoping_questions(
+    client: LocalLLMClient,
+    intent: Intent,
+    task: TaskRequest,
+    brain: str,
+    max_questions: int,
+) -> list[str]:
+    """Propose up to ``max_questions`` situation-specific scoping questions for a research task.
+
+    The research-path counterpart of :func:`core.doc_synthesis.propose_doc_questions`: instead of
+    picking from the fixed routing catalog, the agent reads the real request + persistent context
+    and asks only what genuinely shapes *this* analysis (the decision behind it, the angle that
+    matters, the boundaries). Fail-open — a zero budget or an LLM/parse error yields no questions,
+    and the run proceeds on the routing answers alone (clarification must never block delivery).
+    """
+    if max_questions <= 0:
+        return []
+    language = "German" if intent.language == Language.DE else "English"
+    system = _SCOPING_SYSTEM.format(n=max_questions) + f" Ask in {language}."
+    context = f"\n\nPERSISTENT CONTEXT (brain.md):\n{brain.strip()}" if brain.strip() else ""
+    user = (
+        f"TASK ({intent.task_type.value}): {task.raw_input.strip()}\n"
+        f"Restated intent: {intent.summary or '(none)'}{context}\n\n"
+        "Return the JSON array of scoping questions now."
+    )
+    try:
+        response = client.generate(user, system=system, use_thinking=False)
+        array = extract_json_array(response)
+    except LLMError:
+        return []
+    if not array:
+        return []
+    questions = [str(q).strip() for q in array if isinstance(q, str) and str(q).strip()]
+    return questions[:max_questions]

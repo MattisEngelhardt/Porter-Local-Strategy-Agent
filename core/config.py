@@ -171,6 +171,32 @@ class ColorsConfig(BaseModel):
     artifact_gold: str = "#C99700"
     artifact_risk: str = "#B42318"
     artifact_mist: str = "#EEF6F8"
+    # Porter Editorial palette v3.0 (warm canvas + ink + dark dramatic canvas + warm attention).
+    paper: str = "#F4F1EA"  # warm cream canvas for content pages/slides
+    ink: str = "#1A1813"  # near-black editorial text
+    canvas_dark: str = "#15140F"  # dramatic dark canvas for cover/divider/recommendation
+    coral: str = "#E4572E"  # warm attention/risk accent
+
+
+class StyleConfig(BaseModel):
+    """Porter Editorial design-system knobs (v3.0): typography, intensity, and data visuals.
+
+    The renderers (``core/design.py`` + ``core/exporter.py`` + the brief templates) read these to
+    apply the editorial look (cream canvas, gradient depth, a multi-font system, source-grounded
+    charts). All values are config-driven (RULE 4); fonts fall back to system fonts (Georgia /
+    Aptos / Consolas) so output never breaks when the shipped OFL fonts are not installed.
+    """
+
+    intensity: str = "editorial"  # "editorial" (depth + gradients) | "restrained" (flat/board-safe)
+    serif_font: str = "Fraunces"  # PDF display serif (fallback: Georgia)
+    grotesk_font: str = "Space Grotesk"  # PPTX display grotesk (fallback: Aptos)
+    body_font: str = "Inter"  # body text (fallback: Aptos / Segoe UI)
+    mono_font: str = "Space Mono"  # tracked micro-labels (fallback: Consolas)
+    fonts_dir: str = "./assets/fonts"  # shipped OFL TTFs embedded into the PDF if found
+    charts_enabled: bool = True  # master switch for the visual engine
+    max_charts_per_deck: int = Field(default=4, ge=0)
+    max_charts_per_brief: int = Field(default=3, ge=0)
+    dedicated_visual_call: bool = False  # laptop default: fold visuals into shape_deck (0 extra)
 
 
 class OutputConfig(BaseModel):
@@ -189,6 +215,7 @@ class OutputConfig(BaseModel):
     # standard locations). Forced ahead of any incompatible libgobject on PATH (e.g. Tesseract).
     gtk_runtime_path: str | None = None
     colors: ColorsConfig = Field(default_factory=ColorsConfig)
+    style: StyleConfig = Field(default_factory=StyleConfig)
 
 
 class VoiceConfig(BaseModel):

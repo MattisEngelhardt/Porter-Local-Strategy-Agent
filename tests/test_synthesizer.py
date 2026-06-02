@@ -10,12 +10,20 @@ from core.playbooks import load_playbooks
 from core.synthesizer import (
     build_system_prompt,
     build_user_prompt,
+    compile_cited_sources,
     parse_analysis,
     quality_check,
     synthesize,
 )
 from llm.local_llm_client import LLMError
-from models.research import DocContent, FetchedContent, SourceTier
+from models.research import (
+    DocContent,
+    FetchedContent,
+    Finding,
+    ResearchReport,
+    SourceTier,
+    WorkerFindings,
+)
 from models.synthesis import AnalysisOutput, Section, SourceRef, SynthesisInput
 from models.task import Depth, Intent, Language, OutputFormat, TaskType
 
@@ -156,6 +164,82 @@ def test_parse_analysis_shared_path() -> None:
     )
     assert raw.sections[0].body.startswith("not json")
     assert raw.sources[0].url == "https://x.com/a"
+
+
+# ------------------------------------------------ belegt bibliography (Phase 3.5)
+def test_compile_cited_sources_dedups_and_merges_provenance() -> None:
+    """The belegt set unions worker findings + read sources, deduped by URL, tier-ordered."""
+    report = ResearchReport(
+        worker_findings=[
+            WorkerFindings(
+                sub_topic="funding",
+                findings=[
+                    Finding(claim="raised $100M", source_url="https://reuters.com/a", date="2026-03"),
+                    Finding(claim="hq move", source_url="https://reuters.com/a/"),  # trailing-slash dup
+                    Finding(claim="founder quote", source_url="https://blog.example/post"),
+                ],
+                sources=[
+                    FetchedContent(url="https://reuters.com/a", title="Reuters A", text="t"),
+                    FetchedContent(url="https://crunchbase.com/org/x", title="CB X", text="t"),
+                ],
+            ),
+        ],
+        sources_evaluated=300,  # the scanned hundreds must NOT leak into the bibliography
+    )
+    refs = compile_cited_sources(report)
+    urls = [r.url for r in refs]
+
+    # dedup: reuters collapses to one entry despite 3 mentions (incl. the trailing-slash variant)
+    assert sum("reuters.com/a" in u for u in urls) == 1
+    # merge: title comes from the fetched page, date from the finding, tier is computed
+    reuters = next(r for r in refs if "reuters.com/a" in r.url)
+    assert reuters.title == "Reuters A"
+    assert reuters.date == "2026-03"
+    assert reuters.tier == SourceTier.TIER_1
+    # union of every belegt URL (finding-only + source-only), nothing from sources_evaluated
+    assert "https://blog.example/post" in urls
+    assert "https://crunchbase.com/org/x" in urls
+    assert len(refs) == 3
+    # tier-ordered: Tier 1 reuters precedes the lower-tier blog
+    assert urls.index("https://reuters.com/a") < urls.index("https://blog.example/post")
+
+
+def test_synthesize_always_merges_cited_sources_with_sparse_llm() -> None:
+    """Regression for the '<5 sources' bug: the belegt set is merged even when the LLM cites a few."""
+    cited = [
+        SourceRef(url="https://reuters.com/a", title="Reuters A", date="2026-03", tier=SourceTier.TIER_1),
+        SourceRef(url="https://crunchbase.com/org/x", tier=SourceTier.TIER_2),
+    ]
+    response = json.dumps(
+        {
+            "title": "T",
+            "bottom_line": "BL",
+            "sections": [{"heading": "H", "body": "B"}],
+            "sources": [
+                {"url": "https://reuters.com/a", "tier": "tier_1"},  # duplicate of a belegt source
+                {"url": "https://llm-only.example/z", "tier": "tier_3"},  # LLM-only extra
+            ],
+        }
+    )
+    out = synthesize(_CaptureClient(response), _si(cited_sources=cited))  # type: ignore[arg-type]
+    urls = [r.url for r in out.sources]
+    assert "https://reuters.com/a" in urls  # belegt preserved
+    assert "https://crunchbase.com/org/x" in urls  # belegt the LLM omitted is still present
+    assert "https://llm-only.example/z" in urls  # LLM-only extra merged in
+    assert sum(u == "https://reuters.com/a" for u in urls) == 1  # shared URL not duplicated
+    assert len(out.sources) == 3
+
+
+def test_cited_sources_empty_falls_back_to_research_then_merges_llm() -> None:
+    """With no belegt set, the read research is the deterministic base, still merged with LLM extras."""
+    si = _si(research=[FetchedContent(url="https://ft.com/a", title="FT", text="t")])
+    response = json.dumps(
+        {"title": "T", "bottom_line": "BL", "sections": [], "sources": [{"url": "https://llm.example/z"}]}
+    )
+    out = synthesize(_CaptureClient(response), si)  # type: ignore[arg-type]
+    urls = [r.url for r in out.sources]
+    assert "https://ft.com/a" in urls  # research fallback
+    assert "https://llm.example/z" in urls  # LLM extra merged
 
 
 # -------------------------------------------------------------- quality check

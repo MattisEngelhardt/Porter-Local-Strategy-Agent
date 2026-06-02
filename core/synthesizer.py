@@ -19,7 +19,7 @@ from core.json_utils import extract_json_object
 from core.playbooks import Playbooks, load_playbooks
 from core.researcher import classify_tier
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.research import SourceTier
+from models.research import ResearchReport, SourceTier
 from models.synthesis import AnalysisOutput, Section, SourceRef, SynthesisInput
 from models.task import Depth, Intent, Language, OutputFormat
 
@@ -70,6 +70,13 @@ def build_user_prompt(synthesis_input: SynthesisInput) -> str:
     """Assemble the user prompt: the task + tiered research evidence + provided documents."""
     intent = synthesis_input.intent
     lines = [f"TASK ({intent.task_type.value}): {intent.summary or '(see evidence below)'}"]
+
+    if synthesis_input.guidance.strip():
+        lines.append(
+            "\nUSER GUIDANCE (the user's own answers to the agent's scoping questions — honor "
+            "these in the scope, emphasis, and framing of the analysis):\n"
+            + synthesis_input.guidance.strip()
+        )
 
     if synthesis_input.findings_digest.strip():
         lines.append(
@@ -170,6 +177,77 @@ def _sources_from_research(synthesis_input: SynthesisInput) -> list[SourceRef]:
     ]
 
 
+def _norm_url(url: str) -> str:
+    """Normalize a URL for dedup: trimmed, lowercased, no trailing slash."""
+    return url.strip().rstrip("/").lower()
+
+
+def _tier_order(ref: SourceRef) -> tuple[str, str]:
+    """Sort key: tier_1 → tier_3 (untiered last), then URL — a stable, readable bibliography."""
+    return (ref.tier.value if ref.tier else "tier_9", ref.url.lower())
+
+
+def compile_cited_sources(report: ResearchReport) -> list[SourceRef]:
+    """Compile the deterministic *belegt* bibliography from the workers' provenance.
+
+    The perfect middle between the LLM's sparse JSON pick and every scanned hit: the union of every
+    source a worker pulled a finding from — each ``Finding.source_url`` (with its publication
+    ``date``) plus each worker's read set (``WorkerFindings.sources``, with titles). Deduped by
+    normalized URL (title from the fetched page, date from the finding), tier-ordered. Excludes the
+    hundreds merely scanned (``report.sources_evaluated``).
+    """
+    by_url: dict[str, SourceRef] = {}
+
+    def _upsert(url: str, *, title: str | None = None, date: str | None = None) -> None:
+        url = url.strip()
+        if not url:
+            return
+        key = _norm_url(url)
+        existing = by_url.get(key)
+        if existing is None:
+            by_url[key] = SourceRef(
+                url=url, title=title, date=date, tier=classify_tier(url)
+            )
+            return
+        # Merge metadata across the two provenance sources without overwriting good values.
+        if title and not existing.title:
+            existing.title = title
+        if date and not existing.date:
+            existing.date = date
+
+    for wf in report.worker_findings:
+        for finding in wf.findings:
+            if finding.source_url:
+                _upsert(finding.source_url, date=finding.date)
+        for content in wf.sources:
+            if content.url:
+                _upsert(content.url, title=content.title)
+
+    return sorted(by_url.values(), key=_tier_order)
+
+
+def _merge_sources(primary: list[SourceRef], extra: list[SourceRef]) -> list[SourceRef]:
+    """Union ``primary`` (belegt ground truth, kept in order) with any new-URL ``extra`` (LLM) refs.
+
+    Guarantees every belegt source appears; appends LLM-only sources the workers didn't carry, and
+    backfills a primary entry's missing title/date from a matching LLM ref. Dedup by normalized URL.
+    """
+    merged = list(primary)
+    index = {_norm_url(ref.url): ref for ref in merged}
+    for ref in extra:
+        key = _norm_url(ref.url)
+        existing = index.get(key)
+        if existing is None:
+            merged.append(ref)
+            index[key] = ref
+        else:
+            if ref.title and not existing.title:
+                existing.title = ref.title
+            if ref.date and not existing.date:
+                existing.date = ref.date
+    return merged
+
+
 def _default_title(intent: Intent) -> str:
     """A safe fallback title from the intent summary."""
     return (_opt_str(intent.summary) or "Analysis")[:120]
@@ -179,7 +257,10 @@ def _build_analysis(data: dict[str, object], synthesis_input: SynthesisInput) ->
     """Assemble :class:`AnalysisOutput` from a parsed JSON response."""
     intent = synthesis_input.intent
     sections = _coerce_sections(data.get("sections"))
-    sources = _coerce_sources(data.get("sources")) or _sources_from_research(synthesis_input)
+    # Always merge the deterministic belegt bibliography with whatever the LLM cited — the research
+    # set is the ground truth, not just a fallback for when the model emits zero sources.
+    deterministic = synthesis_input.cited_sources or _sources_from_research(synthesis_input)
+    sources = _merge_sources(deterministic, _coerce_sources(data.get("sources")))
     bottom_line = _opt_str(data.get("bottom_line")) or (sections[0].body[:400] if sections else "")
     return AnalysisOutput(
         title=_opt_str(data.get("title")) or _default_title(intent),
@@ -207,7 +288,7 @@ def parse_analysis(response: str, synthesis_input: SynthesisInput) -> AnalysisOu
             language=intent.language,
             bottom_line=text[:400],
             sections=[Section(heading="Analysis", body=text)] if text else [],
-            sources=_sources_from_research(synthesis_input),
+            sources=synthesis_input.cited_sources or _sources_from_research(synthesis_input),
             recommended_formats=intent.output_formats,
         )
     return _build_analysis(data, synthesis_input)
@@ -237,7 +318,7 @@ def synthesize(client: LocalLLMClient, synthesis_input: SynthesisInput) -> Analy
             title=_default_title(intent),
             language=intent.language,
             bottom_line=f"(Synthesis failed — LLM backend error: {exc})",
-            sources=_sources_from_research(synthesis_input),
+            sources=synthesis_input.cited_sources or _sources_from_research(synthesis_input),
             recommended_formats=intent.output_formats,
         )
 
