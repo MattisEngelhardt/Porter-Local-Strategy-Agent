@@ -150,6 +150,23 @@ porter ask "Was macht Neura Robotics?"  # one-shot question
 porter analyze "..." --effort ultra     # full pipeline, non-interactive
 ```
 
+**One word, either backend.** With **Ollama** (the default) `porter` just works — Ollama serves in the
+background on its own. With **LM Studio**, which does *not* auto-serve, an optional pre-launch hook gives
+you the exact same one-word experience: typing `porter` starts the LM Studio server and loads the model
+for you, then launches the agent. Set it up once:
+
+```powershell
+Copy-Item porter.local.ps1.example porter.local.ps1   # one time
+```
+
+`porter.ps1` runs `porter.local.ps1` (if present) before starting the agent. The template reads your
+`config.yaml`, and **only when the backend is LM Studio** it starts the server if it's down and loads the
+configured model if it isn't already served (idempotent and fast — it does nothing when both are already
+up). `porter.local.ps1` is **gitignored**, so this machine-specific automation never lands in the repo and
+a fresh clone stays clean. If you renamed the model with a custom `--identifier` (see
+[Switching backend](#switch-llm)), set `$baseModel` in the copy to the underlying model key. Net result:
+**`porter` is one word on both backends — nothing to start by hand.**
+
 ### Persistent memory & delta analysis
 
 With `memory.enabled: true` (default) and `nomic-embed-text` pulled, every run's analysis is

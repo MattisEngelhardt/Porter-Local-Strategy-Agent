@@ -1,0 +1,60 @@
+# porter.local.ps1.example — template for a machine-specific pre-launch hook.
+#
+# Copy this file to  porter.local.ps1  (same folder) for a true one-word experience:
+# typing 'porter' auto-starts your local LLM backend before the agent launches, so you
+# never run a setup command by hand. porter.local.ps1 is gitignored — your machine-specific
+# setup never lands in the repo, and a fresh clone has no hook (Ollama needs none).
+#
+# This template covers LM Studio, which (unlike Ollama) does not auto-serve. When config.yaml
+# is on the LM Studio backend it: (1) starts the LM Studio server if it is down, and (2) loads
+# the configured model if it isn't already served — then the agent launches. Idempotent + fast:
+# if the server is up and the model is loaded, it does nothing. No-ops on the Ollama backend.
+
+$ErrorActionPreference = "Stop"
+$root = $PSScriptRoot
+$configPath = Join-Path $root "config.yaml"
+
+# --- read provider / model / num_ctx from the llm: block of config.yaml ---
+$raw = [System.IO.File]::ReadAllText($configPath)
+$llm = [regex]::Match($raw, '(?ms)^llm:.*?(?=^\S)').Value
+function Read-LlmField([string]$key) {
+    $m = [regex]::Match($llm, '(?m)^\s*' + $key + ':\s*"?([^"#\r\n]+)"?')
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return ""
+}
+
+$provider = Read-LlmField "provider"
+if ($provider -ne "lmstudio") { return }   # Ollama (or anything else): nothing to do here
+
+$modelId = Read-LlmField "model"            # the served identifier (== llm.model in config)
+$ctx = Read-LlmField "num_ctx"
+if (-not $ctx) { $ctx = "32768" }
+
+# If you renamed the model with a custom --identifier (so llm.model is NOT a real downloaded
+# model key), set the underlying model key here. Leave "" to load llm.model directly.
+$baseModel = ""                             # e.g. "google/gemma-4-e4b"
+
+$lms = Join-Path $HOME ".lmstudio\bin\lms.exe"
+$api = "http://localhost:1234/v1/models"
+
+# --- 1. probe the server once (tolerant timeout); start it only if truly down ---
+$ids = $null
+try { $ids = (Invoke-RestMethod -Uri $api -TimeoutSec 5).data.id } catch { }
+if ($null -eq $ids) {
+    Write-Host "[porter] starting LM Studio server..." -ForegroundColor Cyan
+    & $lms server start | Out-Null
+    $ids = @()
+    try { $ids = (Invoke-RestMethod -Uri $api -TimeoutSec 8).data.id } catch { }
+}
+
+# --- 2. load the configured model only if it isn't already served ---
+if ($ids -notcontains $modelId) {
+    Write-Host "[porter] loading '$modelId' into LM Studio (~8s, one-time per session)..." -ForegroundColor Cyan
+    if ($baseModel) {
+        & $lms load $baseModel --identifier $modelId --context-length $ctx --gpu max -y | Out-Null
+    }
+    else {
+        & $lms load $modelId --context-length $ctx --gpu max -y | Out-Null
+    }
+    Write-Host "[porter] model ready." -ForegroundColor Green
+}

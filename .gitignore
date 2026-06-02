@@ -30,6 +30,9 @@ data/chroma_db/*
 # Research result cache (diskcache SQLite, Phase 2) — local only
 data/cache/
 
+# Machine-specific porter pre-launch hook (e.g. auto-start LM Studio) — local only
+porter.local.ps1
+
 # Logs
 logs/
 

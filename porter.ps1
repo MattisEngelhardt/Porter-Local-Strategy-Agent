@@ -26,6 +26,13 @@ $venvPython = Join-Path $root ".venv\Scripts\python.exe"
 
 Push-Location $root
 try {
+    # Optional machine-specific pre-launch hook (gitignored, not in the repo).
+    # Use it for environment setup that should run before the agent starts — e.g.
+    # auto-starting the LM Studio server + loading the model so plain 'porter' just
+    # works. Absent on a fresh clone (Ollama path needs nothing extra).
+    $localHook = Join-Path $root "porter.local.ps1"
+    if (Test-Path $localHook) { & $localHook }
+
     if (Test-Path $venvPython) {
         & $venvPython "main.py" @args
     } else {
