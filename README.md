@@ -44,6 +44,9 @@ your machine with no external AI APIs, ever. Type `porter` in your terminal to s
   ollama pull gemma4:e4b        # reasoning model
   ollama pull nomic-embed-text  # embeddings for persistent memory (CPU, no VRAM use)
   ```
+  Prefer **[LM Studio](https://lmstudio.ai)** (e.g. a more compact ~6.3 GB Q4_K_M of the same Gemma
+  model that fits an 8 GB GPU)? It's a first-class alternative — see
+  [Switching backend with one command](#switch-llm). One `switch-llm.ps1 lmstudio` and you're on it.
 - **[Docker Desktop](https://docker.com)** — needed for the `research` command (SearXNG web
   search). The VS Code Docker extension is **not** enough; install the actual Docker Desktop app.
 - **[Tesseract OCR](https://github.com/UB-Mannheim/tesseract/wiki)** — *optional*, only for
@@ -241,6 +244,43 @@ Everything tunable lives in **`config.yaml`** — nothing is hardcoded.
   | llama.cpp server | `llamacpp` | `http://localhost:8080` |
 - **Context window:** `llm.num_ctx` (default 32768) is sent on **every** LLM call. Ollama
   otherwise silently defaults all models to 4096 tokens — this agent never relies on that default.
+
+### Switching backend with one command — Ollama ↔ LM Studio (`switch-llm.ps1`) <a name="switch-llm"></a>
+
+Prefer **LM Studio**? It often ships a **more compact quant** of the same model than Ollama — e.g.
+`google/gemma-4-e4b` (Gemma 4, effective 4B) is **~6.3 GB (Q4_K_M)** in LM Studio vs ~9.6 GB in Ollama,
+so it fits fully in an **8 GB GPU** (e.g. RTX 4060) and runs faster with no VRAM overflow. A
+`switch-llm.ps1` helper flips the backend cleanly and reversibly — it edits **only** the four `llm.*`
+fields in `config.yaml` (`provider`, `base_url`, `model`, `embedding_model`); nothing else is touched,
+nothing is deleted, and both backends stay installed.
+
+```powershell
+.\switch-llm.ps1            # show the active backend (changes nothing)
+.\switch-llm.ps1 lmstudio   # route the agent at LM Studio (:1234)
+.\switch-llm.ps1 ollama     # route the agent back at Ollama (:11434)
+```
+
+When switching to `lmstudio` the script **auto-detects** the loaded chat + embedding model ids from the
+running LM Studio server (`/v1/models`), so you never hand-edit them. After a switch, `porter` and every
+command use the new backend automatically.
+
+**Activate LM Studio first (it does not auto-serve like Ollama).** Install [LM Studio](https://lmstudio.ai),
+download the model in-app (search `gemma-4-e4b`, Q4_K_M), then start the server + load the model — and the
+embedding model for memory:
+
+```powershell
+lms server start                                             # OpenAI-compatible API on :1234
+lms get text-embedding-nomic-embed-text-v1.5                 # embeddings for persistent memory
+lms load google/gemma-4-e4b --context-length 32768 --gpu max -y
+.\switch-llm.ps1 lmstudio                                    # point Porter at LM Studio
+```
+
+(Or enable **"Run server at login"** + **JIT model loading** in the LM Studio app so it serves
+automatically after a reboot.) Notes: embeddings are 768-dim on both backends (same `nomic-embed-text`
+model), so the ChromaDB memory store stays compatible — no rebuild. **Vision** (reading scanned/image
+PDFs *via the LLM*) is Ollama-only; under LM Studio, text-PDF + Tesseract OCR still work, and PPTX/PDF/Excel
+**rendering is pure Python** so output quality is identical on both backends. If the LM Studio server is
+down, commands fail fast with instructions — switch back with `.\switch-llm.ps1 ollama` anytime.
 
 ### Effort master dial (`effort:` block)
 

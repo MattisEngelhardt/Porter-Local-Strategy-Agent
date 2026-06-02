@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-    Launch "Porter" - your local Strategy Agent (fully local; gemma4:e4b via Ollama).
+    Launch "Porter" - your local Strategy Agent (fully local; LLM backend per config.yaml,
+    switchable between Ollama and LM Studio via switch-llm.ps1).
 
 .DESCRIPTION
     Starts the interactive agent REPL from the project root, using the project's
