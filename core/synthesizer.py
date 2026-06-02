@@ -14,13 +14,14 @@ Output rendering to PDF/PPTX/Excel is Phase 4 — this module stops at the struc
 
 from __future__ import annotations
 
+from core.artifact_framework import framework_prompt
 from core.json_utils import extract_json_object
 from core.playbooks import Playbooks, load_playbooks
 from core.researcher import classify_tier
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import SourceTier
 from models.synthesis import AnalysisOutput, Section, SourceRef, SynthesisInput
-from models.task import Depth, Intent, Language
+from models.task import Depth, Intent, Language, OutputFormat
 
 # Per-source / per-document excerpt caps so several sources fit comfortably in num_ctx (32768).
 _MAX_SOURCE_CHARS = 1800
@@ -58,6 +59,9 @@ def build_system_prompt(intent: Intent, brain: str, playbooks: Playbooks) -> str
         "\n# ANALYSIS PLAYBOOK — apply the framework matching the task type\n" + playbooks.analysis
     )
     parts.append("\n# OUTPUT PLAYBOOK\n" + playbooks.output)
+    if any(fmt in {OutputFormat.BRIEF, OutputFormat.DECK} for fmt in intent.output_formats):
+        parts.append("\n# PDF/PPTX ARTIFACT FRAMEWORK\n" + playbooks.artifact_framework)
+        parts.append("\n" + framework_prompt())
     parts.append("\n" + _RESPONSE_FORMAT)
     return "\n".join(parts)
 

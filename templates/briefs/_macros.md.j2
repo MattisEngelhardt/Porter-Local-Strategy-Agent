@@ -21,6 +21,50 @@
 </div>
 {%- endmacro %}
 
+{% macro artifactframe(
+  artifact_label,
+  artifact_type,
+  artifact_audience,
+  evidence_label,
+  evidence_anchors,
+  gap_note,
+  artifact_focus_label="",
+  artifact_focus="",
+  proof_stat_label="",
+  proof_stat="",
+  source_stat_label="",
+  source_stat="",
+  gap_stat_label="",
+  gap_stat=""
+) -%}
+<div class="artifact-ribbon">
+  <span>{{ artifact_label }}</span>
+  <span>{{ artifact_type }} · {{ artifact_audience }}</span>
+</div>
+{% if artifact_focus %}
+<div class="artifact-focus">
+  <span>{{ artifact_focus_label }}</span>
+  <strong>{{ artifact_focus }}</strong>
+</div>
+{% endif %}
+<div class="artifact-stats">
+  <div><span>{{ proof_stat_label }}</span><strong>{{ proof_stat }}</strong></div>
+  <div><span>{{ source_stat_label }}</span><strong>{{ source_stat }}</strong></div>
+  <div><span>{{ gap_stat_label }}</span><strong>{{ gap_stat }}</strong></div>
+</div>
+{% if evidence_anchors %}
+<div class="anchors">
+  <div class="label">{{ evidence_label }}</div>
+  <div class="anchor-grid">
+  {% for anchor in evidence_anchors %}
+    <div class="anchor">{{ anchor.text }}{% if anchor.source %}<span class="source">{{ anchor.source }}</span>{% endif %}</div>
+  {% endfor %}
+  </div>
+</div>
+{% endif %}
+{% if gap_note %}<div class="gap">{{ gap_note }}</div>{% endif %}
+{%- endmacro %}
+
 {% macro sections(items) -%}
 {% for s in items %}
 <h2>{{ s.heading }}</h2>

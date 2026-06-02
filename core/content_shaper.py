@@ -11,6 +11,7 @@ restate the SPEC §11/§13 structure rules; the facts come from the analysis.
 
 from __future__ import annotations
 
+from core.artifact_framework import ArtifactKind, framework_prompt
 from core.exporter import management_deck_structure
 from core.json_utils import extract_json_array, extract_json_object
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -47,10 +48,13 @@ def _t(language: Language, de: str, en: str) -> str:
 _DECK_SYSTEM = """You are a management-deck designer at Neura Robotics (pre-IPO cognitive humanoid \
 robotics, Metzingen). Turn the analysis below into a sequence of board/management slides.
 
-Rules (SPEC §11 + output_playbook):
+Rules (SPEC §11 + output_playbook + Porter Artifact Framework):
 - ONE message per slide. Every headline is the "so what" — a claim/insight, NEVER a topic label.
   BAD: "Competitive Landscape"   GOOD: "Three well-funded rivals are closing the gap".
-- Keep supporting content tight (max ~25 words per slide); short bullets.
+- Use premium, vivid slide models: evidence anchors, decision callouts, risk/option frames,
+  comparison tables, and source appendices. No cheap decoration, clip-art, or generic filler.
+- Keep supporting content tight; if a message needs more space, split the slide rather than
+  shrinking type.
 - Begin with a `title` slide, then an `executive_summary` slide that leads with the bottom line.
 - Pick each slide's type from: {types}.
 - Use `competitive_comparison` (with a `table`) to compare entities; `swot` for a 2x2 grid
@@ -154,6 +158,8 @@ def shape_deck(
     language = "German" if intent.language == Language.DE else "English"
     system = (
         _DECK_SYSTEM.format(types=_SLIDE_TYPES, scr=scr, max=_MAX_SLIDES)
+        + "\n\n"
+        + framework_prompt(ArtifactKind.PPTX)
         + f"\nWrite ALL slide text in {language}."
     )
     try:

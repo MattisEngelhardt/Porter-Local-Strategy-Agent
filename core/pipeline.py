@@ -351,7 +351,7 @@ def _render_outputs(
     if OutputFormat.DECK in intent.output_formats:
         try:
             deck_structure = shape_deck(client, intent, analysis, use_thinking=think)
-            deck = build_deck(deck_structure, config, out_dir)
+            deck = build_deck(deck_structure, config, out_dir, analysis=analysis)
             files.append(deck)
             interaction.notify(
                 _t(intent.language, f"Deck erstellt: {deck}", f"Deck created: {deck}")

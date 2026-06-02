@@ -23,6 +23,7 @@ _PLAYBOOKS_DIR = Path(__file__).resolve().parent.parent / "playbooks"
 _RESEARCH_FILE = "research_playbook.md"
 _ANALYSIS_FILE = "analysis_playbook.md"
 _OUTPUT_FILE = "output_playbook.md"
+_ARTIFACT_FRAMEWORK_FILE = "artifact_framework.md"
 _DEEP_RESEARCH_FILE = "deep_research_playbook.md"  # Phase 3.5 (SPEC §15.5)
 _DOC_PREP_FILE = "doc_prep_playbook.md"  # Phase 3.5 — internal document-preparation mode
 
@@ -43,6 +44,7 @@ class Playbooks(BaseModel):
     output: str
     deep_research: str
     doc_prep: str
+    artifact_framework: str
 
 
 def _read_playbook(directory: Path, filename: str) -> str:
@@ -70,6 +72,7 @@ def _load_cached(directory_str: str) -> Playbooks:
         output=_read_playbook(directory, _OUTPUT_FILE),
         deep_research=_read_playbook(directory, _DEEP_RESEARCH_FILE),
         doc_prep=_read_playbook(directory, _DOC_PREP_FILE),
+        artifact_framework=_read_playbook(directory, _ARTIFACT_FRAMEWORK_FILE),
     )
 
 

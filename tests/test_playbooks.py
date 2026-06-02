@@ -29,6 +29,9 @@ def test_load_playbooks_reads_all_four() -> None:
     # doc_prep_playbook (Phase 3.5): CEO-office document preparation
     assert "Zero Hallucination" in playbooks.doc_prep
     assert "Blueprint" in playbooks.doc_prep
+    # artifact_framework (v2.0): mandatory PDF/PPTX operating system
+    assert "Porter Artifact Framework v2.0" in playbooks.artifact_framework
+    assert "not optional decoration" in playbooks.artifact_framework
 
 
 def test_load_playbooks_is_cached() -> None:
@@ -51,6 +54,7 @@ def test_empty_playbook_fails_fast(tmp_path: Path) -> None:
         "output_playbook.md",
         "deep_research_playbook.md",
         "doc_prep_playbook.md",
+        "artifact_framework.md",
     ):
         (tmp_path / name).write_text("   \n", encoding="utf-8")
     with pytest.raises(PlaybooksError):

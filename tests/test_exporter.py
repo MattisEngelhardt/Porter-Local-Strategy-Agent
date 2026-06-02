@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from core.artifact_framework import framework_marker
 from core.config import AppConfig
 from core.exporter import (
     PdfBuildError,
@@ -19,6 +20,19 @@ from core.exporter import (
 from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import Language, TaskType
+
+
+def _presentation_text(prs) -> str:
+    """Collect text from text boxes and table cells in a rendered PPTX."""
+    chunks: list[str] = []
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                chunks.append(shape.text_frame.text)
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    chunks.extend(cell.text for cell in row.cells)
+    return " ".join(chunks)
 
 
 def _analysis() -> AnalysisOutput:
@@ -37,23 +51,20 @@ def _analysis() -> AnalysisOutput:
 
 
 def test_build_management_deck_creates_pptx(tmp_path: Path) -> None:
-    """A Neura-styled .pptx is created with title + exec-summary + one slide per theme + sources."""
+    """A management .pptx is rendered through the mandatory artifact framework."""
     pptx = pytest.importorskip("pptx")  # python-pptx is a declared dependency
     path = build_management_deck(_analysis(), AppConfig(), tmp_path, Language.EN)
     assert path.exists() and path.suffix == ".pptx"
 
     prs = pptx.Presentation(str(path))
-    # title + executive summary + 2 sections + sources = 5 slides
-    assert len(prs.slides) == 5
+    # title + executive summary + evidence + 2 sections + recommendation + sources
+    assert len(prs.slides) == 7
     title_texts = [shape.text_frame.text for shape in prs.slides[0].shapes if shape.has_text_frame]
     assert any("Q2 Board Update" in text for text in title_texts)
-    # a section headline ("so what") appears on a content slide
-    all_text = " ".join(
-        shape.text_frame.text
-        for slide in prs.slides
-        for shape in slide.shapes
-        if shape.has_text_frame
-    )
+    all_text = _presentation_text(prs)
+    assert framework_marker() in all_text
+    assert "The source base shows" in all_text
+    assert "The next management move follows from the bottom line" in all_text
     assert "Cash runway shortens to 9 months" in all_text
 
 
@@ -104,6 +115,10 @@ def test_render_brief_html_structure_and_bullets() -> None:
     assert "Three rivals are closing in" in html
     assert "<li>1X: $100M</li>" in html and "<li>Figure: $675M</li>" in html
     assert "Executive Summary" in html  # T-1 bottom-line label (EN)
+    assert framework_marker() in html
+    assert "artifact-ribbon" in html
+    assert "Evidence anchors" in html
+    assert "Focus" in html and "Proof" in html and "Sources" in html and "Status" in html
     assert "https://reuters.com/x" in html
 
 
@@ -216,16 +231,31 @@ def test_build_deck_all_slide_types_with_logo(tmp_path: Path) -> None:
     for slide in prs.slides:
         assert any(shape.shape_type == 13 for shape in slide.shapes)
     # The "so what" recommendation headline and its decision callout are present.
-    all_text = " ".join(
-        shape.text_frame.text
-        for slide in prs.slides
-        for shape in slide.shapes
-        if shape.has_text_frame
-    )
+    all_text = _presentation_text(prs)
+    assert framework_marker() in all_text
     assert "Approve the bridge round now" in all_text
     assert "GO — raise" in all_text
     # The comparison table cells made it into the deck.
     assert "Cognitive AI" in all_text  # SWOT quadrant content
+
+
+def test_build_deck_with_analysis_applies_prerender_framework(tmp_path: Path) -> None:
+    """build_deck inserts the evidence/recommendation/source frame before rendering."""
+    pptx = pytest.importorskip("pptx")
+    deck = DeckStructure(
+        title="Thin Draft",
+        language=Language.EN,
+        slides=[SlideContent(slide_type=SlideType.TITLE, headline="Thin Draft")],
+    )
+    path = build_deck(deck, AppConfig(), tmp_path, analysis=_analysis())
+
+    prs = pptx.Presentation(str(path))
+    all_text = _presentation_text(prs)
+    assert framework_marker() in all_text
+    assert "Executive Summary" in all_text
+    assert "The source base shows" in all_text
+    assert "The next management move follows from the bottom line" in all_text
+    assert "q2_financials.xlsx" in all_text
 
 
 def test_build_deck_no_logo_when_disabled(tmp_path: Path) -> None:

@@ -30,6 +30,13 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
+from core.artifact_framework import (
+    brief_frame_context,
+    deck_frame_label,
+    framework_marker,
+    prepare_brief_for_render,
+    prepare_deck_for_render,
+)
 from core.config import AppConfig
 from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput
@@ -228,7 +235,12 @@ def _logo_data_uri(config: AppConfig) -> str | None:
 
 
 def _brief_context(
-    analysis: AnalysisOutput, config: AppConfig, template_name: str
+    analysis: AnalysisOutput,
+    config: AppConfig,
+    template_name: str,
+    *,
+    task_type: TaskType,
+    audience: Audience | None = None,
 ) -> dict[str, Any]:
     """Assemble the Jinja context for a brief from the analysis (bilingual labels)."""
     is_de = analysis.language == Language.DE
@@ -249,7 +261,7 @@ def _brief_context(
         }
         for s in analysis.sources
     ]
-    return {
+    context = {
         "c": config.output.colors,
         "title": analysis.title,
         "meta": meta_line,
@@ -262,6 +274,8 @@ def _brief_context(
         "footer_note": "NEURA · " + ("Management-Briefing" if is_de else "Management Brief"),
         "logo_data_uri": _logo_data_uri(config),
     }
+    context.update(brief_frame_context(analysis, task_type=task_type, audience=audience))
+    return context
 
 
 def render_brief_html(
@@ -272,9 +286,18 @@ def render_brief_html(
     audience: Audience | None = None,
 ) -> str:
     """Render the analysis into a Neura-styled HTML brief (pure — no WeasyPrint, testable)."""
+    analysis = prepare_brief_for_render(analysis)
     template_name = brief_template_for(task_type)
     template = _brief_env().get_template(template_name)
-    return template.render(**_brief_context(analysis, config, template_name))
+    return template.render(
+        **_brief_context(
+            analysis,
+            config,
+            template_name,
+            task_type=task_type,
+            audience=audience,
+        )
+    )
 
 
 def build_brief_pdf(
@@ -310,6 +333,10 @@ _SLIDE_W_IN = 13.333  # 16:9 widescreen
 _SLIDE_H_IN = 7.5
 # SWOT quadrant fills (Strengths/Opportunities = positive, Weaknesses/Threats = risk).
 _SWOT_FILLS = ("excel_positive", "excel_negative", "excel_positive", "excel_negative")
+_METRIC_RE = re.compile(
+    r"(?:EUR|USD|GBP|[$])?\s*\b\d[\d.,]*(?:\s?(?:%|x|m|bn|b|mio|million|billion|mo|months?|years?))?",
+    re.IGNORECASE,
+)
 
 
 class _DeckRenderer:
@@ -320,7 +347,7 @@ class _DeckRenderer:
     slide types share one implementation (no per-type duplication, SPEC §11 + output_playbook).
     """
 
-    def __init__(self, config: AppConfig) -> None:
+    def __init__(self, config: AppConfig, language: Language) -> None:
         """Build an empty 16:9 presentation and cache the pptx primitives + Neura palette."""
         try:
             from pptx import Presentation
@@ -338,6 +365,10 @@ class _DeckRenderer:
         self._Inches = Inches
         self._Pt = Pt
         self.colors = config.output.colors
+        self.language = language
+        self._slide_no = 0
+        self._font_body = "Aptos"
+        self._font_display = "Aptos Display"
         self.prs = Presentation()
         self.prs.slide_width = Inches(_SLIDE_W_IN)
         self.prs.slide_height = Inches(_SLIDE_H_IN)
@@ -351,16 +382,17 @@ class _DeckRenderer:
         return self._RGBColor.from_string(hex_color.lstrip("#").upper())  # type: ignore[no-untyped-call]
 
     def _add_logo(self, slide: Any) -> None:
-        """Place the Neura logo bottom-right on a slide (~2.5cm wide), if configured + present."""
+        """Place the Neura logo flush with the right edge of the slide, bottom-right corner."""
         if not self._show_logo:
             return
         inches = self._Inches
-        slide.shapes.add_picture(
+        pic = slide.shapes.add_picture(
             self._logo,
-            inches(_SLIDE_W_IN) - inches(1.75),
+            0,
             inches(_SLIDE_H_IN) - inches(0.8),
             height=inches(0.4),
         )
+        pic.left = self.prs.slide_width - pic.width
 
     def _text(
         self,
@@ -386,24 +418,229 @@ class _DeckRenderer:
         para = frame.paragraphs[0]
         para.text = text
         para.alignment = align if align is not None else self._PP_ALIGN.LEFT
-        run = para.runs[0]
+        run = para.runs[0] if para.runs else para.add_run()
         run.font.size = self._Pt(size)
         run.font.bold = bold
-        run.font.name = "Arial"
+        run.font.name = self._font_display if size >= 24 else self._font_body
         run.font.color.rgb = self.rgb(color)
         return box
 
-    def _headline(self, slide: Any, text: str) -> None:
-        """Render the slide's 'so what' headline bar at the top of a content slide."""
+    def _accent(self, slide_type: SlideType) -> str:
+        """Semantic accent color for the slide frame."""
+        if slide_type == SlideType.RECOMMENDATION:
+            return self.colors.artifact_teal
+        if slide_type in {SlideType.SWOT, SlideType.FINANCIAL_OVERVIEW}:
+            return self.colors.artifact_gold
+        if slide_type == SlideType.APPENDIX:
+            return self.colors.charcoal
+        return self.colors.accent_cyan
+
+    def _rect(
+        self,
+        slide: Any,
+        left: Any,
+        top: Any,
+        width: Any,
+        height: Any,
+        fill: str,
+        *,
+        line: str | None = None,
+    ) -> Any:
+        """Add a plain rectangle with optional line color."""
+        shape = slide.shapes.add_shape(self._MSO_SHAPE.RECTANGLE, left, top, width, height)
+        shape.fill.solid()
+        shape.fill.fore_color.rgb = self.rgb(fill)
+        if line:
+            shape.line.color.rgb = self.rgb(line)
+            shape.line.width = self._Pt(0.75)
+        else:
+            shape.line.fill.background()
+        return shape
+
+    def _frame(self, slide: Any, sc: SlideContent) -> None:
+        """Apply the mandatory Porter PPTX frame to a non-title slide."""
         inches = self._Inches
+        self._slide_no += 1
+        background = slide.background
+        background.fill.solid()
+        background.fill.fore_color.rgb = self.rgb(self.colors.white)
+        accent = self._accent(sc.slide_type)
+        self._rect(
+            slide,
+            inches(0),
+            inches(0),
+            inches(0.16),
+            inches(_SLIDE_H_IN),
+            self.colors.dark_bg,
+        )
+        self._rect(slide, inches(0.16), inches(0), inches(0.045), inches(_SLIDE_H_IN), accent)
+        self._rect(
+            slide,
+            inches(0.55),
+            inches(6.93),
+            inches(10.9),
+            inches(0.02),
+            self.colors.light_surface,
+        )
+        label = f"{deck_frame_label(self.language, sc.slide_type).upper()} | {framework_marker()}"
+        self._text(
+            slide,
+            label,
+            inches(0.65),
+            inches(0.16),
+            inches(8.8),
+            inches(0.25),
+            8,
+            self.colors.charcoal,
+            bold=True,
+        )
+        self._text(
+            slide,
+            f"{self._slide_no:02d}",
+            inches(11.75),
+            inches(6.98),
+            inches(0.45),
+            inches(0.2),
+            8,
+            self.colors.charcoal,
+            bold=True,
+            align=self._PP_ALIGN.RIGHT,
+        )
+        self._add_logo(slide)
+
+    def _metric_token(self, text: str) -> str | None:
+        """Extract a visible number token from a line, if one exists."""
+        match = _METRIC_RE.search(text)
+        if not match:
+            return None
+        return " ".join(match.group(0).split())[:14]
+
+    def _short(self, text: str, limit: int = 165) -> str:
+        """Keep card text inside fixed boxes."""
+        cleaned = " ".join(str(text).split())
+        return cleaned if len(cleaned) <= limit else cleaned[: limit - 3].rstrip(" ,;:") + "..."
+
+    def _body_callout(
+        self, slide: Any, text: str, *, top: float = 1.55, fill: str | None = None
+    ) -> None:
+        """Render a high-contrast one-message callout."""
+        inches = self._Inches
+        box = self._rounded(
+            slide,
+            inches(0.72),
+            inches(top),
+            inches(11.75),
+            inches(1.18),
+            fill or self.colors.dark_bg,
+        )
+        frame = box.text_frame
+        frame.word_wrap = True
+        frame.vertical_anchor = self._MSO_ANCHOR.MIDDLE
+        frame.margin_left = inches(0.22)
+        frame.margin_right = inches(0.22)
+        para = frame.paragraphs[0]
+        para.text = self._short(text, 190)
+        para.alignment = self._PP_ALIGN.CENTER
+        run = para.runs[0] if para.runs else para.add_run()
+        run.font.size = self._Pt(20)
+        run.font.bold = True
+        run.font.name = self._font_display
+        run.font.color.rgb = self.rgb(self.colors.white)
+
+    def _signal_cards(
+        self, slide: Any, bullets: list[str], *, top: float = 1.75, max_cards: int = 4
+    ) -> None:
+        """Render support points as fixed evidence cards instead of a generic bullet list."""
+        inches = self._Inches
+        lines = [self._short(line) for line in (bullets or ["-"]) if str(line).strip()]
+        lines = lines[:max_cards] or ["-"]
+        count = len(lines)
+        cols = 1 if count == 1 else 2
+        rows = (count + cols - 1) // cols
+        gap = 0.28
+        card_w = 11.75 if cols == 1 else 5.73
+        available_h = max(1.1, 6.65 - top)
+        card_h = min(2.15, (available_h - gap * (rows - 1)) / rows)
+
+        for idx, line in enumerate(lines):
+            row, col = divmod(idx, cols)
+            left = 0.72 + col * (card_w + gap)
+            y = top + row * (card_h + gap)
+            self._rounded(
+                slide,
+                inches(left),
+                inches(y),
+                inches(card_w),
+                inches(card_h),
+                self.colors.light_surface,
+            )
+            token = self._metric_token(line)
+            marker = token or f"{idx + 1:02d}"
+            accent = self.colors.artifact_teal if token else self.colors.artifact_blue
+            self._text(
+                slide,
+                marker,
+                inches(left + 0.22),
+                inches(y + 0.22),
+                inches(1.35),
+                inches(0.52),
+                22 if token else 15,
+                accent,
+                bold=True,
+            )
+            text_left = left + (1.65 if token else 0.22)
+            text_width = card_w - (1.9 if token else 0.45)
+            text_top = y + (0.22 if token else 0.68)
+            self._text(
+                slide,
+                line,
+                inches(text_left),
+                inches(text_top),
+                inches(text_width),
+                inches(card_h - 0.35),
+                13,
+                self.colors.text_dark,
+            )
+
+    def _compact_list(self, slide: Any, items: list[str], *, top: float = 1.75) -> None:
+        """Render appendix/source lines in two dense but readable columns."""
+        inches = self._Inches
+        lines = [self._short(item, 120) for item in (items or ["-"])][:14]
+        for idx, line in enumerate(lines):
+            col = idx % 2
+            row = idx // 2
+            left = 0.75 + col * 5.9
+            y = top + row * 0.52
+            self._text(
+                slide,
+                f"- {line}",
+                inches(left),
+                inches(y),
+                inches(5.55),
+                inches(0.42),
+                9,
+                self.colors.charcoal,
+            )
+
+    def _headline(self, slide: Any, text: str) -> None:
+        """Render the slide's claim headline with an accent marker."""
+        inches = self._Inches
+        self._rect(
+            slide,
+            inches(0.68),
+            inches(0.58),
+            inches(0.08),
+            inches(0.72),
+            self.colors.artifact_gold,
+        )
         self._text(
             slide,
             text,
-            inches(0.7),
-            inches(0.45),
-            inches(11.9),
-            inches(1.2),
-            26,
+            inches(0.88),
+            inches(0.5),
+            inches(11.45),
+            inches(1.0),
+            25,
             self.colors.charcoal,
             bold=True,
         )
@@ -425,12 +662,26 @@ class _DeckRenderer:
             run.font.name = "Arial"
             run.font.color.rgb = self.rgb(self.colors.text_dark)
 
-    def _rounded(self, slide: Any, left: Any, top: Any, width: Any, height: Any, fill: str) -> Any:
+    def _rounded(
+        self,
+        slide: Any,
+        left: Any,
+        top: Any,
+        width: Any,
+        height: Any,
+        fill: str,
+        *,
+        line: str | None = None,
+    ) -> Any:
         """Add a borderless rounded rectangle filled with ``fill`` (clean Neura aesthetic)."""
         shape = slide.shapes.add_shape(self._MSO_SHAPE.ROUNDED_RECTANGLE, left, top, width, height)
         shape.fill.solid()
         shape.fill.fore_color.rgb = self.rgb(fill)
-        shape.line.fill.background()
+        if line:
+            shape.line.color.rgb = self.rgb(line)
+            shape.line.width = self._Pt(0.75)
+        else:
+            shape.line.fill.background()
         shape.shadow.inherit = False
         return shape
 
@@ -442,9 +693,46 @@ class _DeckRenderer:
     def _title_slide(self, sc: SlideContent) -> None:
         inches = self._Inches
         slide = self._new()
+        self._slide_no += 1
         background = slide.background
         background.fill.solid()
         background.fill.fore_color.rgb = self.rgb(self.colors.dark_bg)
+        self._rect(
+            slide,
+            inches(0),
+            inches(0),
+            inches(0.22),
+            inches(_SLIDE_H_IN),
+            self.colors.accent_cyan,
+        )
+        self._rect(
+            slide,
+            inches(0.22),
+            inches(0),
+            inches(0.08),
+            inches(_SLIDE_H_IN),
+            self.colors.artifact_gold,
+        )
+        self._rounded(
+            slide,
+            inches(0.8),
+            inches(0.62),
+            inches(2.75),
+            inches(0.42),
+            self.colors.artifact_teal,
+        )
+        self._text(
+            slide,
+            framework_marker(),
+            inches(0.98),
+            inches(0.72),
+            inches(2.45),
+            inches(0.22),
+            8,
+            self.colors.white,
+            bold=True,
+            align=self._PP_ALIGN.CENTER,
+        )
         self._text(
             slide,
             sc.headline,
@@ -467,33 +755,50 @@ class _DeckRenderer:
             18,
             self.colors.accent_cyan,
         )
+        self._text(
+            slide,
+            date.today().isoformat(),
+            inches(10.2),
+            inches(0.7),
+            inches(2.1),
+            inches(0.3),
+            10,
+            self.colors.light_surface,
+            bold=True,
+            align=self._PP_ALIGN.RIGHT,
+        )
         self._add_logo(slide)
 
     def _table_slide(self, sc: SlideContent) -> None:
         slide = self._new()
+        self._frame(slide, sc)
         self._headline(slide, sc.headline)
+        top = 1.75
+        if sc.body:
+            self._body_callout(slide, sc.body, top=1.58, fill=self.colors.artifact_blue)
+            top = 3.05
         if sc.table:
-            self._draw_table(slide, sc.table)
+            self._draw_table(slide, sc.table, top=top)
         else:
-            self._bullets(slide, sc.bullets)
-        self._add_logo(slide)
+            self._signal_cards(slide, sc.bullets, top=top)
 
-    def _draw_table(self, slide: Any, rows: list[list[str]]) -> None:
+    def _draw_table(self, slide: Any, rows: list[list[str]], *, top: float = 1.8) -> None:
         """Draw a header-styled table (row 0 = header) with alternating row fills."""
         inches, pt = self._Inches, self._Pt
         n_rows = len(rows)
         n_cols = max((len(r) for r in rows), default=1)
+        height = min(4.9, max(0.7, 0.48 * n_rows))
         graphic = slide.shapes.add_table(
-            n_rows, n_cols, inches(0.7), inches(1.8), inches(11.9), inches(0.4 * n_rows)
+            n_rows, n_cols, inches(0.72), inches(top), inches(11.75), inches(height)
         )
         table = graphic.table
         for r, row in enumerate(rows):
             for c in range(n_cols):
                 cell = table.cell(r, c)
-                cell.text = str(row[c]) if c < len(row) else ""
+                cell.text = self._short(str(row[c]) if c < len(row) else "", 95)
                 para = cell.text_frame.paragraphs[0]
                 run = para.runs[0] if para.runs else para.add_run()
-                run.font.name = "Arial"
+                run.font.name = self._font_body
                 run.font.size = pt(12 if r else 13)
                 run.font.bold = r == 0
                 if r == 0:
@@ -511,9 +816,10 @@ class _DeckRenderer:
         """Render a 2x2 SWOT grid from ``table`` rows ([quadrant, content]) or bullets."""
         inches, pt = self._Inches, self._Pt
         slide = self._new()
+        self._frame(slide, sc)
         self._headline(slide, sc.headline)
         quadrants = self._swot_quadrants(sc)
-        positions = [(0.7, 1.8), (7.05, 1.8), (0.7, 4.45), (7.05, 4.45)]
+        positions = [(0.72, 1.75), (6.78, 1.75), (0.72, 4.25), (6.78, 4.25)]
         for (label, content), (left, top), fill in zip(
             quadrants, positions, _SWOT_FILLS, strict=False
         ):
@@ -521,8 +827,8 @@ class _DeckRenderer:
                 slide,
                 inches(left),
                 inches(top),
-                inches(5.6),
-                inches(2.4),
+                inches(5.68),
+                inches(2.16),
                 getattr(self.colors, fill),
             )
             frame = box.text_frame
@@ -534,16 +840,15 @@ class _DeckRenderer:
             head_run = head.runs[0]
             head_run.font.bold = True
             head_run.font.size = pt(15)
-            head_run.font.name = "Arial"
+            head_run.font.name = self._font_body
             head_run.font.color.rgb = self.rgb(self.colors.text_dark)
-            for line in content:
+            for line in content[:3]:
                 para = frame.add_paragraph()
-                para.text = f"• {line}"
+                para.text = f"- {self._short(line, 80)}"
                 run = para.runs[0]
                 run.font.size = pt(12)
-                run.font.name = "Arial"
+                run.font.name = self._font_body
                 run.font.color.rgb = self.rgb(self.colors.text_dark)
-        self._add_logo(slide)
 
     def _swot_quadrants(self, sc: SlideContent) -> list[tuple[str, list[str]]]:
         """Resolve 4 (label, lines) quadrants from the slide's table or bullets (fail-safe)."""
@@ -560,51 +865,73 @@ class _DeckRenderer:
         bullets = sc.bullets or []
         return [(default_labels[i], [bullets[i]] if i < len(bullets) else []) for i in range(4)]
 
-    def _recommendation_slide(self, sc: SlideContent) -> None:
-        """A clean decision slide: headline + a standalone accent callout (decision-ready)."""
-        inches = self._Inches
+    def _executive_slide(self, sc: SlideContent) -> None:
+        """Render the executive summary as a bottom-line callout plus proof cards."""
         slide = self._new()
+        self._frame(slide, sc)
         self._headline(slide, sc.headline)
-        box = self._rounded(
-            slide, inches(0.7), inches(1.9), inches(11.9), inches(1.6), self.colors.accent_cyan
-        )
-        frame = box.text_frame
-        frame.word_wrap = True
-        frame.vertical_anchor = self._MSO_ANCHOR.MIDDLE
-        para = frame.paragraphs[0]
-        para.text = sc.body or (sc.bullets[0] if sc.bullets else "—")
-        para.alignment = self._PP_ALIGN.CENTER
-        run = para.runs[0]
-        run.font.size = self._Pt(22)
-        run.font.bold = True
-        run.font.name = "Arial"
-        run.font.color.rgb = self.rgb(self.colors.white)
+        lead = sc.body or (sc.bullets[0] if sc.bullets else "-")
+        self._body_callout(slide, lead, top=1.62, fill=self.colors.artifact_blue)
         supporting = sc.bullets if sc.body else sc.bullets[1:]
-        if supporting:
-            self._bullets(slide, supporting, top=3.8)
-        self._add_logo(slide)
+        self._signal_cards(slide, supporting or sc.bullets[:1], top=3.15, max_cards=4)
+
+    def _recommendation_slide(self, sc: SlideContent) -> None:
+        """Render a decision-ready recommendation with explicit support."""
+        slide = self._new()
+        self._frame(slide, sc)
+        self._headline(slide, sc.headline)
+        decision = sc.body or (sc.bullets[0] if sc.bullets else "-")
+        self._body_callout(slide, decision, top=1.62, fill=self.colors.artifact_teal)
+        supporting = sc.bullets if sc.body else sc.bullets[1:]
+        if sc.table:
+            self._draw_table(slide, sc.table, top=3.12)
+        else:
+            self._signal_cards(slide, supporting or [decision], top=3.12, max_cards=4)
+
+    def _appendix_slide(self, sc: SlideContent) -> None:
+        """Render sources/appendix material as a compact two-column reference page."""
+        slide = self._new()
+        self._frame(slide, sc)
+        self._headline(slide, sc.headline)
+        if sc.body:
+            self._body_callout(slide, sc.body, top=1.55, fill=self.colors.charcoal)
+            top = 3.0
+        else:
+            top = 1.72
+        items = sc.bullets
+        if sc.table:
+            items = [" - ".join(str(cell) for cell in row if str(cell).strip()) for row in sc.table]
+        self._compact_list(slide, items, top=top)
 
     def _content_slide(self, sc: SlideContent) -> None:
-        """Generic 'one message per slide': headline + table (if present) or bullets."""
+        """Render a non-special content slide through the artifact frame."""
         slide = self._new()
+        self._frame(slide, sc)
         self._headline(slide, sc.headline)
+        top = 1.75
+        if sc.body:
+            self._body_callout(slide, sc.body, top=1.58, fill=self._accent(sc.slide_type))
+            top = 3.05
         if sc.table:
-            self._draw_table(slide, sc.table)
+            self._draw_table(slide, sc.table, top=top)
         else:
-            self._bullets(slide, sc.bullets)
-        self._add_logo(slide)
+            self._signal_cards(slide, sc.bullets, top=top)
 
     def render(self, sc: SlideContent) -> None:
         """Dispatch a single slide to its renderer by :class:`~models.deck.SlideType`."""
         if sc.slide_type == SlideType.TITLE:
             self._title_slide(sc)
+        elif sc.slide_type == SlideType.EXECUTIVE_SUMMARY:
+            self._executive_slide(sc)
         elif sc.slide_type == SlideType.COMPETITIVE_COMPARISON:
             self._table_slide(sc)
         elif sc.slide_type == SlideType.SWOT:
             self._swot_slide(sc)
         elif sc.slide_type == SlideType.RECOMMENDATION:
             self._recommendation_slide(sc)
-        else:  # exec summary / market / company / financial / signals / appendix
+        elif sc.slide_type == SlideType.APPENDIX:
+            self._appendix_slide(sc)
+        else:
             self._content_slide(sc)
 
     def save(self, output_dir: str | Path, title: str) -> Path:
@@ -616,14 +943,20 @@ class _DeckRenderer:
         return path
 
 
-def build_deck(deck: DeckStructure, config: AppConfig, output_dir: str | Path) -> Path:
+def build_deck(
+    deck: DeckStructure,
+    config: AppConfig,
+    output_dir: str | Path,
+    analysis: AnalysisOutput | None = None,
+) -> Path:
     """Render a :class:`~models.deck.DeckStructure` into a Neura-styled .pptx and return its path.
 
     Handles all 10 SPEC §11 slide types (Neura colors from ``config.output.colors``, Arial, rounded
     callouts, logo bottom-right on every slide). Raises :class:`DeckBuildError` if python-pptx is
     unavailable.
     """
-    renderer = _DeckRenderer(config)
+    deck = prepare_deck_for_render(deck, analysis)
+    renderer = _DeckRenderer(config, deck.language)
     for slide in deck.slides:
         renderer.render(slide)
     return renderer.save(output_dir, deck.title)
@@ -672,7 +1005,12 @@ def build_management_deck(
     analysis: AnalysisOutput, config: AppConfig, output_dir: str | Path, language: Language
 ) -> Path:
     """Back-compatible management deck — builds a generic structure and renders via build_deck."""
-    return build_deck(management_deck_structure(analysis, language), config, output_dir)
+    return build_deck(
+        management_deck_structure(analysis, language),
+        config,
+        output_dir,
+        analysis=analysis,
+    )
 
 
 # ----------------------------------------------------------------- PDF (back-compat shim)

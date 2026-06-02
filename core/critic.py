@@ -27,6 +27,7 @@ _CRITIC_SYSTEM = (
     "BEFORE it reaches the user. Score it 0-100 against the rubric below. Be objective and "
     "specific: name concrete fixes, never vague praise.\n\n"
     "# OUTPUT RULES\n{output}\n\n"
+    "# PORTER ARTIFACT FRAMEWORK (PDF/PPTX)\n{artifact_framework}\n\n"
     "# DEEP-RESEARCH / SOURCE VALIDATION\n{deep_research}\n\n"
     "# RUBRIC (judge each criterion pass/fail with a one-line comment)\n"
     "1. bottom_line_first — the recommendation / bottom line leads.\n"
@@ -38,7 +39,9 @@ _CRITIC_SYSTEM = (
     "6. assumptions_flagged — unverified / single-source claims and data gaps are called out.\n"
     "7. framework_fit — the analysis framework matching the task type is applied.\n"
     "8. language — the analysis is written in {language}.\n"
-    "9. no_filler — no corporate filler; headlines say 'so what', not topic labels.\n\n"
+    "9. no_filler — no corporate filler; headlines say 'so what', not topic labels.\n"
+    "10. artifact_ready — if rendered as PDF/PPTX, it has vivid source-grounded anchors, "
+    "decision/risk structure, and no cheap decoration or hallucinated visual claims.\n\n"
     "Respond with ONLY a JSON object — no prose:\n"
     '{{"score": 0, "criteria": [{{"name": "...", "passed": true, "comment": "..."}}], '
     '"issues": ["concrete fix 1", "concrete fix 2"], "summary": "one-sentence verdict"}}'
@@ -133,6 +136,7 @@ def critique(
     """
     system = _CRITIC_SYSTEM.format(
         output=playbooks.output,
+        artifact_framework=playbooks.artifact_framework,
         deep_research=playbooks.deep_research,
         language=_language_name(intent.language),
     )

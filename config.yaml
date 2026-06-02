@@ -88,6 +88,11 @@ output:
     excel_positive: "#E2EFDA"          # Green — positive/good values
     excel_negative: "#FFDDC1"          # Red-orange — negative/risk values
     excel_header: "#2D2D2D"            # Dark header rows
+    artifact_blue: "#1F4E79"           # Premium evidence/accent blue for PDF/PPTX
+    artifact_teal: "#157A6E"           # Decision/action accent for PDF/PPTX
+    artifact_gold: "#C99700"           # Attention marker for important anchors
+    artifact_risk: "#B42318"           # Risk/warning accent, used sparingly
+    artifact_mist: "#EEF6F8"           # Quiet evidence-chip background
 
 voice:                                 # Phase 5 — local push-to-talk (faster-whisper + pyaudio)
   enabled: false                       # true = Ctrl+Space dictation in the REPL (additive)

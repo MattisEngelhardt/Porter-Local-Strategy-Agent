@@ -17,6 +17,7 @@ import re
 from datetime import date
 from pathlib import Path
 
+from core.artifact_framework import framework_prompt
 from core.json_utils import extract_json_array
 from core.playbooks import Playbooks
 from core.synthesizer import parse_analysis
@@ -62,6 +63,8 @@ def build_briefing_system(intent: Intent, brain: str, playbooks: Playbooks) -> s
         parts.append("\n# PERSISTENT CONTEXT (brain.md)\n" + brain.strip())
     parts.append("\n# DOCUMENT-PREPARATION PLAYBOOK\n" + playbooks.doc_prep)
     parts.append("\n# OUTPUT PLAYBOOK\n" + playbooks.output)
+    parts.append("\n# PDF/PPTX ARTIFACT FRAMEWORK\n" + playbooks.artifact_framework)
+    parts.append("\n" + framework_prompt())
     parts.append("\n" + _NO_HALLUCINATION)
     parts.append("\n" + _RESPONSE_FORMAT)
     return "\n".join(parts)

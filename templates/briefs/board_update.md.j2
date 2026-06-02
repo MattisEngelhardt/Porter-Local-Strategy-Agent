@@ -4,6 +4,7 @@
 <body>
 {{ m.head(title, meta, logo_data_uri) }}
 {{ m.bottomline(bl_label, bottom_line) }}
+{{ m.artifactframe(artifact_label, artifact_type, artifact_audience, evidence_label, evidence_anchors, gap_note, artifact_focus_label, artifact_focus, proof_stat_label, proof_stat, source_stat_label, source_stat, gap_stat_label, gap_stat) }}
 {{ m.sections(sections) }}
 {{ m.sources(sources_label, sources) }}
 {% if note %}<div class="note">{{ note }}</div>{% endif %}

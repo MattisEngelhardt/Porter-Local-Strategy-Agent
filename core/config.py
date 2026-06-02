@@ -166,6 +166,11 @@ class ColorsConfig(BaseModel):
     excel_positive: str = "#E2EFDA"
     excel_negative: str = "#FFDDC1"
     excel_header: str = "#2D2D2D"
+    artifact_blue: str = "#1F4E79"
+    artifact_teal: str = "#157A6E"
+    artifact_gold: str = "#C99700"
+    artifact_risk: str = "#B42318"
+    artifact_mist: str = "#EEF6F8"
 
 
 class OutputConfig(BaseModel):
