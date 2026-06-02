@@ -180,6 +180,11 @@ class OutputConfig(BaseModel):
     output_dir: str = "./output"
     include_logo: bool = True
     logo_path: str = "./assets/neura_logo.png"
+    # Auto-showcase: after a run that renders a PPTX, if its critic score beats the currently
+    # published demo's score, swap the README "best demo output" link to the new deck and
+    # commit+push it (fail-open; never breaks a run). Demos are test runs, so every run qualifies.
+    auto_promote_demo: bool = True
+    demo_min_score: int = 0  # only promote a deck whose critic score is at least this floor
     # Optional explicit GTK3-runtime bin dir for WeasyPrint on Windows (None = auto-detect
     # standard locations). Forced ahead of any incompatible libgobject on PATH (e.g. Tesseract).
     gtk_runtime_path: str | None = None

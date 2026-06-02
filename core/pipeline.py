@@ -30,6 +30,7 @@ from core.clarification import clarify
 from core.config import AppConfig, EffortLevelConfig
 from core.content_shaper import shape_deck, shape_workbook
 from core.critic import critique, revise
+from core.demo_showcase import maybe_promote_demo
 from core.doc_synthesis import (
     propose_doc_questions,
     synthesize_briefing,
@@ -575,6 +576,17 @@ def run_pipeline(
 
     # Render the routed deliverables (PDF / PPTX / Excel) — Business Case = Deck + Excel (N-6).
     output_files = _render_outputs(client, config, intent, analysis, interaction, effort_cfg)
+
+    # Showcase: if this run's deck beats the published demo's critic score, swap the README's
+    # "best demo output" link and push it (fail-open; demos are test runs). N/A when no deck.
+    maybe_promote_demo(
+        output_files=output_files,
+        critique_score=crit.score if crit is not None else None,
+        title=analysis.title,
+        auto_promote=config.output.auto_promote_demo,
+        min_score=config.output.demo_min_score,
+        notify=interaction.notify,
+    )
 
     # SPEC §5.3 / §15 — write this run to memory after delivery (fail-open).
     if memory is not None:
