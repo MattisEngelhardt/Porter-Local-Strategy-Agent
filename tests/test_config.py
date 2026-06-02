@@ -18,14 +18,37 @@ def test_config_yaml_loads() -> None:
     assert isinstance(config, AppConfig)
 
 
-def test_llm_defaults_match_spec() -> None:
-    """Key LLM fields match the SPEC §8 schema."""
-    config = load_config(CONFIG_PATH)
-    assert config.llm.provider == "ollama"
-    assert config.llm.model == "gemma4:e4b"
-    assert config.llm.num_ctx == 32768  # CRITICAL: never the 4096 default
-    assert config.llm.base_url == "http://localhost:11434"
-    assert config.llm.thinking_mode is True
+def test_llm_schema_defaults_match_spec() -> None:
+    """The LLMConfig schema defaults match the SPEC §8 reference (Ollama / gemma4:e4b)."""
+    defaults = LLMConfig()
+    assert defaults.provider == "ollama"
+    assert defaults.model == "gemma4:e4b"
+    assert defaults.num_ctx == 32768  # CRITICAL: never the 4096 default (N-1)
+    assert defaults.base_url == "http://localhost:11434"
+    assert defaults.thinking_mode is True
+
+
+def test_live_config_llm_matches_active_backend() -> None:
+    """The active config.yaml is valid for whichever backend is selected (elegant switch, REQ-3).
+
+    The project ships a one-line provider/model switch (switch-llm.ps1) and must stay green on BOTH
+    backends — now and on future hardware. Backend-independent invariants are always asserted; each
+    backend's contract is checked when it is active (so the Ollama assertions are preserved, not
+    removed — they simply apply when Ollama is selected).
+    """
+    llm = load_config(CONFIG_PATH).llm
+    # Invariants that must hold on every backend:
+    assert llm.num_ctx == 32768  # CRITICAL: never the 4096 default (N-1)
+    assert llm.thinking_mode is True
+    assert llm.base_url.startswith("http")
+    assert llm.model  # a model name is configured
+    # Backend-specific defaults — both kept first-class by the switch:
+    expected_base = {"ollama": "http://localhost:11434", "lmstudio": "http://localhost:1234"}
+    assert llm.provider in {*expected_base, "llamacpp", "openai"}
+    if llm.provider in expected_base:
+        assert llm.base_url == expected_base[llm.provider]
+    if llm.provider == "ollama":
+        assert llm.model == "gemma4:e4b"  # SPEC §8 default model when on Ollama
 
 
 def test_excel_and_neura_colors_present() -> None:

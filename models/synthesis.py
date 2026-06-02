@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
 from models.task import ClarificationRound, EffortLevel, Intent, Language, OutputFormat
+from models.visuals import ChartSpec
 
 
 class Section(BaseModel):
@@ -18,6 +19,7 @@ class Section(BaseModel):
 
     heading: str
     body: str
+    visual: ChartSpec | None = None  # optional inline data chart (Editorial visual engine)
 
 
 class SourceRef(BaseModel):
@@ -38,6 +40,10 @@ class SynthesisInput(BaseModel):
     brain_context: str = ""  # injected from brain.md (SPEC §4.5)
     findings_digest: str = ""  # validated multi-agent findings digest (Phase 3.5)
     prior_findings: str = ""  # retrieved from ChromaDB memory (Phase 5)
+    cited_sources: list[SourceRef] = Field(
+        default_factory=list
+    )  # deterministic belegt set compiled from the research report's worker findings (Phase 3.5)
+    guidance: str = ""  # the user's answers to the situation-specific intake scoping questions
 
 
 class AnalysisOutput(BaseModel):

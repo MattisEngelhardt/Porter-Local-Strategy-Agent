@@ -1,7 +1,7 @@
 llm:
-  provider: "ollama"
-  base_url: "http://localhost:11434"    # Change to switch backend
-  model: "gemma4:e4b"
+  provider: "lmstudio"
+  base_url: "http://localhost:1234"    # Change to switch backend
+  model: "Porter-LMStudio"
   num_ctx: 32768                        # CRITICAL: Always passed to API — never rely on default
   temperature: 0.2
   thinking_mode: true
@@ -9,7 +9,7 @@ llm:
     vision: true
     context_window: 131072
     practical_context: 32768
-  embedding_model: "nomic-embed-text"
+  embedding_model: "text-embedding-nomic-embed-text-v1.5"
   # KV cache optimization — set as SYSTEM environment variable, NOT read from this file:
   # Windows: setx OLLAMA_KV_CACHE_TYPE q8_0
   # Only needed if VRAM is tight with 32K context. Not required for Phase 1.
@@ -88,15 +88,32 @@ output:
     excel_positive: "#E2EFDA"          # Green — positive/good values
     excel_negative: "#FFDDC1"          # Red-orange — negative/risk values
     excel_header: "#2D2D2D"            # Dark header rows
-    artifact_blue: "#1F4E79"           # Premium evidence/accent blue for PDF/PPTX
-    artifact_teal: "#157A6E"           # Decision/action accent for PDF/PPTX
-    artifact_gold: "#C99700"           # Attention marker for important anchors
+    artifact_blue: "#1F4E79"           # Premium evidence/accent blue for PDF/PPTX (chart primary series)
+    artifact_teal: "#157A6E"           # Decision/action accent for PDF/PPTX (positive series)
+    artifact_gold: "#C99700"           # Attention marker for important anchors (highlight series)
     artifact_risk: "#B42318"           # Risk/warning accent, used sparingly
     artifact_mist: "#EEF6F8"           # Quiet evidence-chip background
+    # Porter Editorial palette v3.0 (warm canvas + ink + dramatic dark canvas + warm attention)
+    paper: "#F4F1EA"                   # warm cream canvas for content pages/slides
+    ink: "#1A1813"                     # near-black editorial text
+    canvas_dark: "#15140F"             # dramatic dark canvas for cover/divider/recommendation
+    coral: "#E4572E"                   # warm attention/risk accent (chart series)
+
+  style:                               # Porter Editorial design-system v3.0 (typography + depth + charts)
+    intensity: "editorial"             # "editorial" (depth + gradients) | "restrained" (flat, board-safe)
+    serif_font: "Fraunces"             # PDF display serif (fallback: Georgia)
+    grotesk_font: "Space Grotesk"      # PPTX display grotesk (fallback: Aptos)
+    body_font: "Inter"                 # body text (fallback: Aptos / Segoe UI)
+    mono_font: "Space Mono"            # tracked micro-labels (fallback: Consolas)
+    fonts_dir: "./assets/fonts"        # shipped OFL TTFs embedded into the PDF (@font-face) when present
+    charts_enabled: true               # master switch for the data-visualization engine
+    max_charts_per_deck: 4
+    max_charts_per_brief: 3
+    dedicated_visual_call: false       # laptop default: fold visuals into shape_deck (0 extra LLM calls)
 
 voice:                                 # Phase 5 — local push-to-talk (faster-whisper + pyaudio)
-  enabled: false                       # true = Ctrl+Space dictation in the REPL (additive)
-  model: "base"                        # faster-whisper size: tiny|base|small|medium|large-v3
+  enabled: true                        # true = Ctrl+Space dictation in the REPL (additive)
+  model: "small"                       # faster-whisper size: tiny|base|small|medium|large-v3
   language: "auto"                     # "auto" | "de" | "en"
   hotkey: "ctrl+space"                 # global hotkey to dictate into the prompt
   sample_rate: 16000                   # 16 kHz mono — what Whisper expects
