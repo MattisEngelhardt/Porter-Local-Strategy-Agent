@@ -19,9 +19,16 @@ PHASE_4_KICKOFF.md
 PHASE_5_KICKOFF.md
 demo_prompt.txt
 
-# Generated outputs (keep the directory, ignore its contents)
+# Generated outputs (keep the directory, ignore its contents by default).
+# Outputs may contain confidential context, so nothing is published unless
+# explicitly whitelisted below. Curated demo examples (one per format) are
+# committed so the deliverables are viewable on GitHub.
 output/*
 !output/.gitkeep
+!output/2026-06-02_evaluate_figure_ai_as_a_potential_m_a_target_for_n_deck.pptx
+!output/2026-06-01_competitive_analysis_figure_ai_strategic_threat_an_brief.pdf
+!output/2026-06-01_develop_a_comprehensive_business_case_analyzing_th_business_case.xlsx
+!output/2026-05-31_q2_2026_performance_review_financial_health_and_st_briefing.md
 
 # Persistent memory store (keep the directory, ignore its contents)
 data/chroma_db/*
