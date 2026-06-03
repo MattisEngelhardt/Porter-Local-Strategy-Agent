@@ -13,6 +13,7 @@ from llm.local_llm_client import LLMError
 from models.deck import SlideType
 from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import Intent, Language, OutputFormat, TaskType
+from models.visuals import ChartType
 from models.workbook import (
     BenchmarkData,
     BusinessCaseData,
@@ -106,6 +107,47 @@ def test_shape_deck_failopen_on_bad_json() -> None:
     deck = shape_deck(_Client("not json at all"), _intent(), _analysis())
     assert deck.slides[0].slide_type == SlideType.TITLE
     assert any(s.slide_type == SlideType.EXECUTIVE_SUMMARY for s in deck.slides)
+
+
+# ----------------------------------------------------------------- folded LLM data-visual (Block 4)
+def test_shape_deck_propose_visuals_adds_instructions() -> None:
+    """``propose_visuals`` injects the data-visual schema into the shaping prompt (server/ultra)."""
+    on = _Client('[{"slide_type":"title","headline":"t"}]')
+    shape_deck(on, _intent(), _analysis(), propose_visuals=True)
+    assert "DATA VISUAL" in on.systems[0]
+    off = _Client('[{"slide_type":"title","headline":"t"}]')
+    shape_deck(off, _intent(), _analysis())  # laptop default: no visual request, 0 added prompt
+    assert "DATA VISUAL" not in off.systems[0]
+
+
+def test_shape_deck_parses_folded_visual() -> None:
+    """A slide's ``visual`` object is coerced into a typed ChartSpec (schema-guided parsing)."""
+    response = """[
+      {"slide_type": "title", "headline": "1X"},
+      {"slide_type": "financial_overview", "headline": "Figure leads on funding",
+       "visual": {"chart_type": "column", "categories": ["Figure", "1X"],
+                  "series": [{"name": "Funding (m)", "values": [675, 100]}],
+                  "caption": "Figure leads", "unit": "m"}}
+    ]"""
+    deck = shape_deck(_Client(response), _intent(), _analysis(), propose_visuals=True)
+    fin = next(s for s in deck.slides if s.slide_type == SlideType.FINANCIAL_OVERVIEW)
+    assert fin.visual is not None
+    assert fin.visual.chart_type == ChartType.COLUMN
+    assert fin.visual.categories == ["Figure", "1X"]
+    assert fin.visual.series[0].values == [675.0, 100.0]
+
+
+def test_shape_deck_drops_unrenderable_visual() -> None:
+    """A length-mismatched ``visual`` candidate is dropped (parse-safe before any grounding)."""
+    response = """[
+      {"slide_type": "title", "headline": "1X"},
+      {"slide_type": "market_landscape", "headline": "Bad chart",
+       "visual": {"chart_type": "column", "categories": ["a", "b", "c"],
+                  "series": [{"name": "x", "values": [1, 2]}]}}
+    ]"""
+    deck = shape_deck(_Client(response), _intent(), _analysis())
+    ml = next(s for s in deck.slides if s.slide_type == SlideType.MARKET_LANDSCAPE)
+    assert ml.visual is None
 
 
 # ----------------------------------------------------------------- shape_workbook (E-1..E-4)
