@@ -125,6 +125,28 @@ async def test_searxng_parses_and_limits_results() -> None:
     assert results[0].snippet == "snip"
 
 
+async def test_searxng_raises_when_json_reports_engine_outage() -> None:
+    """SearXNG can be up while every upstream engine is broken."""
+    payload = {
+        "results": [],
+        "unresponsive_engines": [
+            ["brave", "HTTP connection error"],
+            ["duckduckgo", "HTTP connection error"],
+        ],
+    }
+    client = SearXNGClient(_config())
+    session = _FakeSession(_FakeResp(json_payload=payload))
+
+    with pytest.raises(SearXNGError) as excinfo:
+        await client._search_one(SearchQuery(query="OpenAI"), session)  # type: ignore[arg-type]
+
+    message = str(excinfo.value)
+    assert "search engines are failing" in message
+    assert "docker compose logs --tail 80 searxng" in message
+    assert "searxng-data/certs" in message
+    assert "do not set 'outgoing.verify: false'" in message
+
+
 async def test_search_many_tolerates_partial_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """One failing query yields [] for it but the run still returns the others."""
     client = SearXNGClient(_config())
@@ -152,6 +174,7 @@ async def test_search_many_all_fail_raises(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(SearXNGError) as excinfo:
         await client.search_many([SearchQuery(query="a"), SearchQuery(query="b")])
     assert "Fix:" in str(excinfo.value)
+    assert "localhost:8888 is intentional" in str(excinfo.value)
 
 
 # --------------------------------------------------------------- content fetch

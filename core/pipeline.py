@@ -53,6 +53,7 @@ from core.memory import (
 )
 from core.playbooks import load_playbooks
 from core.research_agent import ResearchManager
+from core.startup import check_searxng
 from core.synthesizer import compile_cited_sources, quality_check, synthesize
 from core.visual_selector import attach_brief_visuals, attach_deck_visuals
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -274,7 +275,19 @@ def _run_research(
     effort_cfg: EffortLevelConfig,
     manager: ResearchManager | None,
 ) -> ResearchReport:
-    """Run the multi-agent research via the manager (built from config unless one is injected)."""
+    """Run multi-agent research, preflighting SearXNG before real workers start.
+
+    Injected managers are test/offline doubles and skip the live dependency check.
+    """
+    if manager is None:
+        interaction.notify(
+            _t(
+                intent.language,
+                f"Pruefe SearXNG unter {config.research.searxng_url}...",
+                f"Checking SearXNG at {config.research.searxng_url}...",
+            )
+        )
+        check_searxng(config)
     active = manager or ResearchManager()
     report = asyncio.run(active.run(client, config, intent, plan, interaction, effort_cfg))
     interaction.notify(
@@ -541,6 +554,7 @@ def run_pipeline(
         brain-based ``quick_answer``.
 
     Raises:
+        StartupError: If SearXNG is unreachable before real workers start.
         SearXNGError: If every research worker is starved (fail fast, SPEC REQ-5) — caller-handled.
     """
     brain = load_brain(config.memory)

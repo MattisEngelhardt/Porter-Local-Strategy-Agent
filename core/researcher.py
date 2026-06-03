@@ -19,6 +19,7 @@ import aiohttp
 import trafilatura
 
 from core.config import ResearchConfig
+from core.searxng_health import searxng_engine_outage_message
 from models.research import (
     FetchedContent,
     RankedResult,
@@ -155,6 +156,9 @@ class SearXNGClient:
 
         limit = query.max_results or self._max_results
         hits = data.get("results") or []
+        outage = searxng_engine_outage_message(self._base_url, data)
+        if not hits and outage:
+            raise SearXNGError(outage)
         return [
             SearchResult(
                 title=str(item.get("title", "")),
@@ -199,13 +203,19 @@ class SearXNGClient:
                 pairs.append((query.query, outcome))
 
         if errors and len(errors) == len(queries):
+            if isinstance(errors[0], SearXNGError):
+                raise SearXNGError(str(errors[0])) from errors[0]
             raise SearXNGError(
                 f"All {len(queries)} SearXNG queries failed against {self._base_url}.\n"
                 "Fix:\n"
-                "  1. Start SearXNG: 'docker compose up -d' (needs Docker Desktop).\n"
-                "  2. Enable JSON output in searxng-data/settings.yml: "
+                "  1. Start Docker Desktop and wait until the Docker daemon is running.\n"
+                "  2. Start SearXNG: 'docker compose up -d searxng' in the project root.\n"
+                f"  3. Keep 'research.searxng_url' aligned with the configured host port "
+                f"({self._base_url}).\n"
+                "     With docker-compose.yml set to '8888:8080', localhost:8888 is intentional.\n"
+                "  4. Enable JSON output in searxng-data/settings.yml: "
                 "'search: {formats: [html, json]}'.\n"
-                f'  3. Verify: curl "{self._base_url}/search?q=test&format=json".\n'
+                f'  5. Verify: curl "{self._base_url}/search?q=test&format=json".\n'
                 f"First error: {errors[0]!r}"
             ) from errors[0]
         return pairs

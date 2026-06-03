@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from core.config import AppConfig
+from core.searxng_health import searxng_engine_outage_message
 
 _OLLAMA_PROVIDER = "ollama"
 
@@ -98,7 +99,8 @@ def check_searxng(config: AppConfig, timeout: float = 5.0) -> None:
 
     Two distinct failures get distinct fixes: an unreachable host means Docker /
     the container is down; a non-JSON response means the JSON output format is not
-    enabled in ``searxng-data/settings.yml``.
+    enabled in ``searxng-data/settings.yml``. It also catches the local proxy /
+    VPN CA case where SearXNG returns JSON but multiple upstream engines fail.
 
     Raises:
         StartupError: If SearXNG is unreachable or JSON output is disabled.
@@ -106,19 +108,21 @@ def check_searxng(config: AppConfig, timeout: float = 5.0) -> None:
     base = config.research.searxng_url.rstrip("/")
     url = f"{base}/search"
     try:
-        response = httpx.get(url, params={"q": "test", "format": "json"}, timeout=timeout)
+        response = httpx.get(url, params={"q": "OpenAI", "format": "json"}, timeout=timeout)
         response.raise_for_status()
     except httpx.HTTPError as exc:
         raise StartupError(
             f"SearXNG is not reachable at {base}.\n"
             "Fix:\n"
-            "  1. Install Docker Desktop from https://docker.com (not the VS Code extension).\n"
-            "  2. Start SearXNG: 'docker compose up -d' in the project root.\n"
-            f"  3. Confirm 'research.searxng_url' in config.yaml is correct ({base})."
+            "  1. Start Docker Desktop and wait until the Docker daemon is running.\n"
+            "  2. Start SearXNG: 'docker compose up -d searxng' in the project root.\n"
+            f"  3. Keep 'research.searxng_url' aligned with the configured host port ({base}).\n"
+            "     With docker-compose.yml set to '8888:8080', localhost:8888 is intentional.\n"
+            f'  4. Verify: curl "{base}/search?q=test&format=json".'
         ) from exc
 
     try:
-        response.json()
+        data: dict[str, Any] = response.json()
     except ValueError as exc:
         raise StartupError(
             f"SearXNG at {base} responded but did not return JSON.\n"
@@ -129,3 +133,7 @@ def check_searxng(config: AppConfig, timeout: float = 5.0) -> None:
             "      - json\n"
             "Then restart: 'docker compose restart'."
         ) from exc
+
+    outage = searxng_engine_outage_message(base, data)
+    if outage:
+        raise StartupError(outage)

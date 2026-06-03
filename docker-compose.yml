@@ -7,8 +7,12 @@ services:
     image: searxng/searxng:latest
     ports:
       - "8888:8080"
+    environment:
+      PYTHONPATH: /etc/searxng/python
+      PORTER_SEARXNG_RELAX_LOCAL_CA_STRICT: "1"
     volumes:
       - ./searxng-data:/etc/searxng
+      - ./searxng-data/certs:/usr/local/share/ca-certificates:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]

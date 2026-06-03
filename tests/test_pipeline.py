@@ -15,6 +15,7 @@ from core import pipeline as pipeline_mod
 from core.config import AppConfig
 from core.memory import MemoryLayerError, MemoryRecord
 from core.pipeline import AutoInteraction, plan_subqueries, run_pipeline
+from core.startup import StartupError
 from models.research import (
     Confidence,
     FetchedContent,
@@ -23,7 +24,15 @@ from models.research import (
     WorkerFindings,
 )
 from models.synthesis import AnalysisOutput, Section, SourceRef
-from models.task import EffortLevel, Intent, Language, OutputFormat, TaskRequest, TaskType
+from models.task import (
+    EffortLevel,
+    Intent,
+    Language,
+    OutputFormat,
+    ResearchPlan,
+    TaskRequest,
+    TaskType,
+)
 
 _PASS_CRITIQUE = '{"score": 90, "criteria": [], "issues": [], "summary": "Strong."}'
 
@@ -146,6 +155,34 @@ def _config(tmp_path: Path) -> AppConfig:
     config = AppConfig()
     config.output.output_dir = str(tmp_path)
     return config
+
+
+def test_run_research_preflights_searxng_before_real_workers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The REPL/default manager path fails before launching workers when SearXNG is down."""
+    config = _config(tmp_path)
+    interaction = AutoInteraction()
+
+    def fail_preflight(config_arg: AppConfig) -> None:
+        assert config_arg is config
+        raise StartupError("SearXNG is not reachable at http://localhost:8888")
+
+    monkeypatch.setattr(pipeline_mod, "check_searxng", fail_preflight)
+
+    with pytest.raises(StartupError) as excinfo:
+        pipeline_mod._run_research(
+            _ScriptedClient(intent="{}"),  # type: ignore[arg-type]
+            config,
+            _intent(),
+            ResearchPlan(sub_questions=["1X funding"], summary="Go?"),
+            interaction,
+            config.effort.level_for("high"),
+            manager=None,
+        )
+
+    assert "SearXNG is not reachable" in str(excinfo.value)
+    assert interaction.notes == ["Checking SearXNG at http://localhost:8888..."]
 
 
 # ----------------------------------------------------------------- full run

@@ -31,7 +31,7 @@ try {
     # auto-starting the LM Studio server + loading the model so plain 'porter' just
     # works. Absent on a fresh clone (Ollama path needs nothing extra).
     $localHook = Join-Path $root "porter.local.ps1"
-    if (Test-Path $localHook) { & $localHook }
+    if (Test-Path $localHook) { & $localHook @args }
 
     if (Test-Path $venvPython) {
         & $venvPython "main.py" @args

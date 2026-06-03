@@ -27,6 +27,7 @@ from core.memory import MemoryStore, append_brain_additions
 from core.pdf_reader import PdfReadError, read_pdf
 from core.pipeline import resolve_memory, run_pipeline
 from core.researcher import SearXNGError
+from core.startup import StartupError
 from core.voice_input import VoiceError, VoiceInput, build_voice_input
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent
@@ -351,6 +352,9 @@ def _handle_task(
         )
     except SearXNGError as exc:
         console.print(Panel(str(exc), title="research failed", border_style="red"))
+        return
+    except StartupError as exc:
+        console.print(Panel(str(exc), title="startup check failed", border_style="red"))
         return
     except LLMError as exc:
         console.print(Panel(str(exc), title="LLM error", border_style="red"))

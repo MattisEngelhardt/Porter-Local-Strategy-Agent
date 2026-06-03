@@ -119,6 +119,11 @@ docker compose restart
 curl "http://localhost:8888/search?q=test&format=json"
 ```
 
+If outbound requests fail with `CERTIFICATE_VERIFY_FAILED` behind local proxy/VPN or antivirus
+TLS inspection, export that local root CA as a `.crt` file into `searxng-data/certs/`.
+Docker Compose mounts that folder into SearXNG's standard CA path, and `outgoing.verify`
+should point at `/etc/ssl/certs/ca-certificates.crt`.
+
 If SearXNG is down or JSON is disabled, the `research` command fails fast with the exact
 fix instructions — the rest of the agent (`ask`, REPL, `analyze-doc`) still works without it.
 

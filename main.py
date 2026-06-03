@@ -295,6 +295,9 @@ def prepare(
     except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
         console.print(Panel(str(exc), title="document error", border_style="red"))
         raise typer.Exit(code=1) from exc
+    except StartupError as exc:
+        console.print(Panel(str(exc), title="startup check failed", border_style="red"))
+        raise typer.Exit(code=1) from exc
     except LLMError as exc:
         console.print(Panel(str(exc), title="LLM error", border_style="red"))
         raise typer.Exit(code=1) from exc

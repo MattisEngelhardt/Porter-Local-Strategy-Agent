@@ -23,21 +23,129 @@
 # on login" in LM Studio settings (Ctrl+,). The server then stays in the tray and auto-starts
 # on login, so the backend is always up and this hook only ever has to load the model.
 
+param([Parameter(ValueFromRemainingArguments = $true)] [string[]] $PorterArgs)
+
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $configPath = Join-Path $root "config.yaml"
 
-# --- read provider / model / num_ctx / embedding_model from the llm: block of config.yaml ---
+# --- read provider/model fields and research.searxng_url from config.yaml ---
 $raw = [System.IO.File]::ReadAllText($configPath)
 $llm = [regex]::Match($raw, '(?ms)^llm:.*?(?=^\S)').Value
+$research = [regex]::Match($raw, '(?ms)^research:.*?(?=^\S)').Value
 function Read-LlmField([string]$key) {
     $m = [regex]::Match($llm, '(?m)^\s*' + $key + ':\s*"?([^"#\r\n]+)"?')
     if ($m.Success) { return $m.Groups[1].Value.Trim() }
     return ""
 }
+function Read-ResearchField([string]$key) {
+    $m = [regex]::Match($research, '(?m)^\s*' + $key + ':\s*"?([^"#\r\n]+)"?')
+    if ($m.Success) { return $m.Groups[1].Value.Trim() }
+    return ""
+}
+
+function Should-EnsureSearxng([string[]]$CliArgs) {
+    if (-not $CliArgs -or $CliArgs.Count -eq 0) { return $true }  # REPL: later research should work.
+    $tokens = @($CliArgs | ForEach-Object { ([string]$_).Trim().ToLowerInvariant() })
+    return (($tokens -contains "research") -or ($tokens -contains "analyze"))
+}
+
+function Test-SearxngJson([string]$BaseUrl) {
+    $url = $BaseUrl.TrimEnd("/")
+    try {
+        $r = Invoke-RestMethod -Uri "$url/search?q=porter-health&format=json" -TimeoutSec 5
+        return ($null -ne $r)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Test-DockerCli {
+    $cmd = Get-Command docker -ErrorAction SilentlyContinue
+    return ($null -ne $cmd)
+}
+
+function Test-DockerDaemon {
+    if (-not (Test-DockerCli)) { return $false }
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & docker info 1>$null 2>$null } finally { $ErrorActionPreference = $prev }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Get-DockerDesktopExe {
+    foreach ($p in @(
+            (Join-Path ${env:ProgramFiles} "Docker\Docker\Docker Desktop.exe"),
+            (Join-Path ${env:ProgramW6432} "Docker\Docker\Docker Desktop.exe"),
+            (Join-Path $env:LOCALAPPDATA "Programs\Docker\Docker\Docker Desktop.exe"))) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    return ""
+}
+
+function Wait-DockerDaemon([int]$Seconds) {
+    for ($i = 0; $i -lt $Seconds; $i++) {
+        if (Test-DockerDaemon) { return $true }
+        Start-Sleep -Seconds 1
+    }
+    return $false
+}
+
+function Invoke-DockerComposeUp {
+    Push-Location $root
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & docker compose up -d searxng 1>$null 2>$null } finally { $ErrorActionPreference = $prev; Pop-Location }
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Ensure-Searxng([string]$BaseUrl) {
+    if (-not $BaseUrl) { $BaseUrl = "http://localhost:8888" }
+    if (Test-SearxngJson $BaseUrl) { return }
+
+    if (-not (Test-DockerCli)) {
+        Write-Warning "[porter] Docker CLI not found; SearXNG cannot be auto-started."
+        return
+    }
+
+    if (-not (Test-DockerDaemon)) {
+        $dockerDesktop = Get-DockerDesktopExe
+        if (-not $dockerDesktop) {
+            Write-Warning "[porter] Docker daemon is down and Docker Desktop.exe was not found."
+            return
+        }
+
+        Write-Host "[porter] starting Docker Desktop for SearXNG..." -ForegroundColor Cyan
+        Start-Process -FilePath $dockerDesktop -WindowStyle Hidden | Out-Null
+        if (-not (Wait-DockerDaemon 90)) {
+            Write-Warning "[porter] Docker daemon did not become ready within 90s; SearXNG cannot be auto-started."
+            return
+        }
+    }
+
+    Write-Host "[porter] starting SearXNG on localhost:8888..." -ForegroundColor Cyan
+    if (-not (Invoke-DockerComposeUp)) {
+        Write-Warning "[porter] 'docker compose up -d searxng' failed. Run 'docker compose ps' for details."
+        return
+    }
+
+    for ($i = 0; $i -lt 60; $i++) {
+        if (Test-SearxngJson $BaseUrl) {
+            Write-Host "[porter] SearXNG ready at $BaseUrl." -ForegroundColor Green
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    Write-Warning "[porter] SearXNG did not return JSON within 60s. Verify: curl `"$BaseUrl/search?q=test&format=json`""
+}
+
+$searxngUrl = Read-ResearchField "searxng_url"
+if (Should-EnsureSearxng $PorterArgs) {
+    Ensure-Searxng $searxngUrl
+}
 
 $provider = Read-LlmField "provider"
-if ($provider -ne "lmstudio") { return }   # Ollama (or anything else): nothing to do here
+if ($provider -ne "lmstudio") { return }   # SearXNG is handled above; no LM Studio boot needed.
 
 $modelId        = Read-LlmField "model"            # the served identifier (== llm.model in config)
 $ctx            = Read-LlmField "num_ctx"
