@@ -2,7 +2,7 @@
 {% import "_macros.md.j2" as m %}
 <!doctype html><html><head><meta charset="utf-8">{% include "_styles.md.j2" %}</head>
 <body>
-{{ m.head(title, meta, logo_data_uri) }}
+{% include "_head.md.j2" %}
 {{ m.bottomline(bl_label, bottom_line) }}
 {{ m.artifactframe(artifact_label, artifact_type, artifact_audience, evidence_label, evidence_anchors, gap_note, artifact_focus_label, artifact_focus, proof_stat_label, proof_stat, source_stat_label, source_stat, gap_stat_label, gap_stat) }}
 {{ m.sections(sections) }}
