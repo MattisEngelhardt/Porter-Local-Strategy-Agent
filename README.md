@@ -6,7 +6,7 @@ your machine with no external AI APIs, ever. Type `porter` in your terminal to s
 
 > ### 🎯 Best demo output
 > <!-- BEST_DEMO_PPTX:START --> (auto-updated — do not edit by hand)
-> **▶ [Preparing a comprehensive, board-grade presentation assessing Apptronik's competitive threat and outlining concrete stra (PPTX)](output/2026-06-03_preparing_a_comprehensive_board_grade_presentation_deck.pptx)**
+> **▶ **
 > — our latest and best end-to-end run (output-critic score 100/100). Click to download/view.
 > <!-- BEST_DEMO_PPTX:END -->
 >
