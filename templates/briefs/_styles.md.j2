@@ -1,65 +1,117 @@
 {#
-  Shared Neura brief stylesheet (Phase 4). Colors are injected from config.output.colors
-  (RULE 4 — nothing hardcoded) via the ``c`` context object. WeasyPrint consumes HTML/CSS, so
-  these ``.md.j2`` templates emit HTML (the SPEC §4.6 "Markdown → weasyprint" step is resolved to
+  Porter Editorial brief stylesheet (v3.0, Block 3). Colors come from config.output.colors
+  (RULE 4 — nothing hardcoded) via ``c``; the multi-font CSS stacks (serif/grotesk/body/mono) and
+  the chart ``palette`` are injected by ``core.exporter._brief_context`` from ``core.design`` so the
+  system-font fallbacks survive when the shipped OFL TTFs are absent (REQ-1/2). WeasyPrint consumes
+  HTML/CSS, so these ``.md.j2`` templates emit HTML (SPEC §4.6 "Markdown → weasyprint" resolved to
   HTML because no Markdown→HTML library is permitted by SPEC §6 / RULE 3 — documented in PROGRESS).
+  ``editorial`` toggles the expressive depth (luminous cover band, dark HUD ribbon); ``restrained``
+  keeps the identical structure but flat + board-safe.
 #}
 <style>
+  {{ font_faces_css }}
   @page {
     size: A4;
-    margin: 1.8cm 1.8cm 1.6cm 1.8cm;
-    @bottom-right { content: counter(page) " / " counter(pages); font-size: 8pt; color: {{ c.charcoal }}; }
-    @bottom-left  { content: "{{ footer_note }}"; font-size: 8pt; color: {{ c.charcoal }}; }
+    margin: 1.7cm 1.7cm 1.5cm 1.7cm;
+    @bottom-right { content: counter(page) " / " counter(pages); font-family: {{ font_mono }};
+                    font-size: 7.5pt; color: {{ c.charcoal }}; }
+    @bottom-left  { content: "{{ footer_note }}"; font-family: {{ font_mono }};
+                    font-size: 7.5pt; color: {{ c.charcoal }}; }
   }
   * { box-sizing: border-box; }
-  body { font-family: Aptos, "Segoe UI", Arial, sans-serif; color: {{ c.text_dark }};
-         font-size: 10.5pt; line-height: 1.45; margin: 0; background: {{ c.white }}; }
+  body { font-family: {{ font_body }}; color: {{ c.ink }}; font-size: 10.5pt; line-height: 1.5;
+         margin: 0; background: {{ c.paper }}; }
+
+  /* DNA 5 — luminous warm→cool cover band (editorial only; restrained omits it). */
+  .cover-band { display: block; width: 100%; height: 7pt; margin: 0 0 11pt 0; }
+
   .head { display: flex; justify-content: space-between; align-items: flex-start;
-          border-bottom: 2px solid {{ c.artifact_blue }}; padding-bottom: 8pt; margin-bottom: 8pt; }
-  .head .titles { max-width: 78%; }
-  h1 { font-family: "Aptos Display", Aptos, "Segoe UI", Arial, sans-serif; font-size: 21pt;
-       color: {{ c.text_dark }}; margin: 0 0 3pt 0; line-height: 1.12; }
-  .meta { color: {{ c.charcoal }}; font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.4pt; }
-  .artifact-ribbon { display: flex; justify-content: space-between; gap: 8pt; align-items: center;
-       margin: 0 0 11pt 0; padding: 5pt 8pt; background: {{ c.artifact_mist }};
-       border-left: 3pt solid {{ c.artifact_teal }}; color: {{ c.artifact_blue }};
-       font-size: 8.2pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.35pt; }
-  .artifact-focus { margin: 0 0 7pt 0; padding: 6pt 8pt; background: {{ c.light_surface }};
-       border-left: 3pt solid {{ c.artifact_gold }}; color: {{ c.charcoal }}; font-size: 9.2pt; }
-  .artifact-focus span { display: block; color: {{ c.artifact_blue }}; font-size: 7.6pt;
-       font-weight: 800; text-transform: uppercase; letter-spacing: 0.35pt; margin-bottom: 1pt; }
-  .artifact-focus strong { font-size: 10pt; }
-  .artifact-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6pt;
-       margin: 0 0 10pt 0; }
-  .artifact-stats div { padding: 6pt 7pt; background: {{ c.white }};
-       border: 1px solid {{ c.light_surface }}; border-top: 2pt solid {{ c.artifact_teal }}; }
-  .artifact-stats span { display: block; color: {{ c.artifact_blue }}; font-size: 7.4pt;
-       font-weight: 800; text-transform: uppercase; letter-spacing: 0.35pt; }
-  .artifact-stats strong { color: {{ c.text_dark }}; font-size: 11pt; }
+          {% if editorial %}border-bottom: 1px solid {{ c.ink }};
+          {% else %}border-bottom: 2px solid {{ c.artifact_blue }};{% endif %}
+          padding-bottom: 9pt; margin-bottom: 12pt; }
+  .head .titles { max-width: 80%; }
+  /* DNA 1/2/7 — oversized serif display headline, one key token in the coral spot color. */
+  h1 { font-family: {{ font_serif }}; font-size: 27pt; font-weight: 600; color: {{ c.ink }};
+       margin: 0 0 5pt 0; line-height: 1.08; letter-spacing: -0.2pt; }
+  h1 .hl { color: {{ spot }}; }
+  .meta { font-family: {{ font_mono }}; color: {{ c.charcoal }}; font-size: 8pt;
+          text-transform: uppercase; letter-spacing: 0.6pt; }
+  /* DNA 6 — source-grounded telemetry as mono outline chips. */
+  .telemetry { margin-top: 8pt; }
+  .telemetry .chip { display: inline-block; font-family: {{ font_mono }}; font-size: 7.2pt;
+       font-weight: 700; letter-spacing: 0.4pt; text-transform: uppercase; color: {{ c.charcoal }};
+       border: 0.8pt solid {{ c.charcoal }}; border-radius: 9pt; padding: 1.5pt 7pt; margin: 0 4pt 4pt 0; }
   .logo { height: 26pt; }
-  .bl { background: linear-gradient(90deg, {{ c.artifact_blue }} 0%, {{ c.charcoal }} 100%);
-        color: {{ c.white }}; border-left: 4px solid {{ c.artifact_gold }};
-        padding: 11pt 13pt; margin: 0 0 10pt 0; }
-  .bl .label { font-size: 8.5pt; text-transform: uppercase; letter-spacing: 0.5pt;
-               color: {{ c.artifact_mist }}; font-weight: bold; margin-bottom: 2pt; }
-  .bl .text { font-size: 12pt; font-weight: 600; }
-  .anchors { margin: 0 0 12pt 0; }
-  .anchors .label { color: {{ c.artifact_blue }}; font-size: 8.5pt; font-weight: 700;
-       text-transform: uppercase; letter-spacing: 0.35pt; margin-bottom: 4pt; }
-  .anchor-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6pt; }
-  .anchor { min-height: 35pt; padding: 7pt; background: {{ c.artifact_mist }};
-       border-top: 2pt solid {{ c.artifact_gold }}; color: {{ c.text_dark }}; font-size: 8.8pt; }
-  .anchor .source { display: block; margin-top: 3pt; color: {{ c.charcoal }}; font-size: 7.5pt; }
-  .gap { margin: 7pt 0 10pt 0; padding: 6pt 8pt; border-left: 3pt solid {{ c.artifact_risk }};
+
+  /* Bottom line — the message up front: cream card, coral spine, serif standfirst. */
+  .bl { background: {{ c.artifact_mist }}; color: {{ c.ink }}; border-left: 5pt solid {{ spot }};
+        padding: 12pt 14pt; margin: 0 0 12pt 0; }
+  .bl .label { font-family: {{ font_mono }}; font-size: 7.6pt; text-transform: uppercase;
+               letter-spacing: 0.7pt; color: {{ c.artifact_teal }}; font-weight: 700; margin-bottom: 4pt; }
+  .bl .text { font-family: {{ font_serif }}; font-size: 13.5pt; font-weight: 500; line-height: 1.32; }
+
+  /* DNA 3/6 — indexed HUD ribbon (dark on editorial, mist on restrained). */
+  .artifact-ribbon { display: flex; justify-content: space-between; gap: 8pt; align-items: center;
+       margin: 0 0 11pt 0; padding: 5pt 9pt; font-family: {{ font_mono }}; font-size: 7.6pt;
+       font-weight: 700; text-transform: uppercase; letter-spacing: 0.5pt;
+       border-left: 3pt solid {{ c.artifact_teal }};
+       {% if editorial %}background: {{ c.canvas_dark }}; color: {{ c.paper }};
+       {% else %}background: {{ c.artifact_mist }}; color: {{ c.artifact_blue }};{% endif %} }
+  .artifact-focus { margin: 0 0 9pt 0; padding: 7pt 9pt; background: {{ c.light_surface }};
+       border-left: 3pt solid {{ c.artifact_gold }}; color: {{ c.charcoal }}; font-size: 9.2pt; }
+  .artifact-focus span { font-family: {{ font_mono }}; display: block; color: {{ c.artifact_blue }};
+       font-size: 7.4pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5pt; margin-bottom: 2pt; }
+  .artifact-focus strong { font-family: {{ font_serif }}; font-size: 11pt; font-weight: 600; color: {{ c.ink }}; }
+
+  /* DNA 4/6/8 — metric stat cards: one accent per card, grotesk numerals, corner-arrow. */
+  .artifact-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7pt; margin: 0 0 11pt 0; }
+  .artifact-stats div { position: relative; padding: 8pt 9pt 7pt 9pt; background: {{ c.white }};
+       border: 1px solid {{ c.light_surface }}; border-top: 2.5pt solid {{ palette[0] }}; border-radius: 3pt; }
+  .artifact-stats span { font-family: {{ font_mono }}; display: block; color: {{ c.charcoal }};
+       font-size: 7pt; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5pt; }
+  .artifact-stats strong { font-family: {{ font_grotesk }}; color: {{ c.ink }}; font-size: 15pt; font-weight: 700; }
+  .artifact-stats div::after { content: "\2197"; position: absolute; top: 5pt; right: 7pt;
+       font-family: {{ font_body }}; font-size: 9pt; color: {{ palette[0] }}; }
+  .artifact-stats div:nth-child(2) { border-top-color: {{ palette[1] }}; }
+  .artifact-stats div:nth-child(2)::after { color: {{ palette[1] }}; }
+  .artifact-stats div:nth-child(3) { border-top-color: {{ palette[2] }}; }
+  .artifact-stats div:nth-child(3)::after { color: {{ palette[2] }}; }
+
+  /* Evidence anchors — indexed accent-top cards with corner-arrows (DNA 3/4/8). */
+  .anchors { margin: 0 0 13pt 0; }
+  .anchors .label { font-family: {{ font_mono }}; color: {{ c.artifact_blue }}; font-size: 8pt;
+       font-weight: 700; text-transform: uppercase; letter-spacing: 0.5pt; margin-bottom: 5pt; }
+  .anchor-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7pt; }
+  .anchor { position: relative; min-height: 38pt; padding: 8pt 8pt 7pt 8pt; background: {{ c.white }};
+       border: 1px solid {{ c.light_surface }}; border-top: 2.5pt solid {{ palette[3] }}; border-radius: 3pt;
+       color: {{ c.ink }}; font-size: 8.8pt; line-height: 1.35; }
+  .anchor .idx { font-family: {{ font_mono }}; display: block; font-size: 7pt; font-weight: 700;
+       color: {{ c.charcoal }}; letter-spacing: 0.5pt; margin-bottom: 3pt; }
+  .anchor .source { font-family: {{ font_mono }}; display: block; margin-top: 4pt;
+       color: {{ c.charcoal }}; font-size: 7.2pt; }
+  .anchor::after { content: "\2197"; position: absolute; top: 5pt; right: 7pt;
+       font-family: {{ font_body }}; font-size: 9pt; color: {{ palette[3] }}; }
+  .anchor:nth-child(3n+2) { border-top-color: {{ palette[4] }}; }
+  .anchor:nth-child(3n+2)::after { color: {{ palette[4] }}; }
+  .anchor:nth-child(3n+3) { border-top-color: {{ palette[1] }}; }
+  .anchor:nth-child(3n+3)::after { color: {{ palette[1] }}; }
+  .gap { margin: 8pt 0 11pt 0; padding: 7pt 9pt; border-left: 3pt solid {{ c.artifact_risk }};
        background: #FFF4F2; color: {{ c.artifact_risk }}; font-size: 8.8pt; font-weight: 600; }
-  h2 { font-family: "Aptos Display", Aptos, "Segoe UI", Arial, sans-serif; font-size: 13pt;
-       color: {{ c.artifact_blue }}; margin: 13pt 0 4pt 0; border-bottom: 1px solid {{ c.light_surface }};
-       padding-bottom: 2pt; }
+
+  /* DNA 1 — serif section heads on cream, generous whitespace. */
+  h2 { font-family: {{ font_serif }}; font-size: 15pt; font-weight: 600; color: {{ c.ink }};
+       margin: 16pt 0 5pt 0; padding-bottom: 3pt; border-bottom: 1px solid {{ c.light_surface }}; }
   p { margin: 0 0 7pt 0; }
-  ul { margin: 0 0 8pt 0; padding-left: 16pt; }
+  ul { margin: 0 0 9pt 0; padding-left: 16pt; }
   li { margin-bottom: 3pt; }
-  .sources { margin-top: 4pt; font-size: 9pt; }
-  .sources li { margin-bottom: 2pt; color: {{ c.charcoal }}; }
-  .tier { color: {{ c.accent_cyan }}; font-weight: bold; }
-  .note { font-size: 8.5pt; color: {{ c.charcoal }}; font-style: italic; margin-top: 10pt; }
+
+  /* Embedded hand-built SVG data chart (the locked PDF render tech — no raster, no new dep). */
+  figure.chart { margin: 11pt 0 13pt 0; padding: 10pt 12pt; background: {{ c.white }};
+       border: 1px solid {{ c.light_surface }}; border-radius: 4pt; page-break-inside: avoid; }
+  figure.chart svg { display: block; }
+
+  .sources { margin-top: 5pt; font-size: 9pt; }
+  .sources li { margin-bottom: 3pt; color: {{ c.charcoal }}; }
+  .tier { font-family: {{ font_mono }}; color: {{ c.artifact_teal }}; font-weight: 700; font-size: 7.6pt; }
+  .note { font-family: {{ font_mono }}; font-size: 8pt; color: {{ c.charcoal }}; margin-top: 12pt; }
 </style>

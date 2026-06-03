@@ -54,6 +54,7 @@ from core.memory import (
 from core.playbooks import load_playbooks
 from core.research_agent import ResearchManager
 from core.synthesizer import compile_cited_sources, quality_check, synthesize
+from core.visual_selector import attach_brief_visuals, attach_deck_visuals
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent, ResearchReport
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, SynthesisInput
@@ -358,22 +359,37 @@ def _render_outputs(
     analysis: AnalysisOutput,
     interaction: Interaction,
     effort_cfg: EffortLevelConfig,
+    report: ResearchReport | None = None,
 ) -> list[Path]:
     """Render all routed deliverables (PDF brief, PPTX deck, Excel). Fail-open per renderer.
 
-    Decks and Excel are shaped from the prose analysis by ``content_shaper`` (one LLM call each)
-    before rendering. A renderer failure (e.g. WeasyPrint's GTK runtime missing, or a shaping/build
-    error) never loses the analysis — it is reported via ``notify`` and the other outputs still ship
-    (SPEC REQ-5). Business Case routes to Deck + Excel together (N-6, already in output_formats).
+    The ``report`` (the manager's :class:`~models.research.ResearchReport`) is threaded into both
+    renderers so the source-grounded telemetry chips (DNA 6) light up live, and into the Editorial
+    visual selector (:mod:`core.visual_selector`) so charts are derived + grounded from real data
+    (laptop default = deterministic, 0 extra LLM calls). Decks and Excel are shaped from the prose
+    analysis by ``content_shaper`` (one LLM call each) before rendering. A renderer failure (e.g.
+    WeasyPrint's GTK runtime missing, or a shaping/build error) never loses the analysis — it is
+    reported via ``notify`` and the other outputs still ship (SPEC REQ-5). Business Case routes to
+    Deck + Excel together (N-6, already in output_formats).
     """
     files: list[Path] = []
     out_dir = config.output.output_dir
     think = effort_cfg.thinking
+    style = config.output.style
+    # Folded LLM visual is server/ultra only (effort dial): the shaper proposes a chart in the same
+    # call; laptop default stays deterministic + 0 extra LLM (North Star). Still grounded after.
+    propose_visuals = style.dedicated_visual_call or intent.effort == EffortLevel.ULTRA
 
     if OutputFormat.BRIEF in intent.output_formats:
         try:
+            brief_analysis = attach_brief_visuals(analysis, report, style)
             pdf = build_brief_pdf(
-                analysis, config, out_dir, task_type=intent.task_type, audience=intent.audience
+                brief_analysis,
+                config,
+                out_dir,
+                task_type=intent.task_type,
+                audience=intent.audience,
+                research_report=report,
             )
             files.append(pdf)
             interaction.notify(_t(intent.language, f"PDF erstellt: {pdf}", f"PDF created: {pdf}"))
@@ -384,8 +400,13 @@ def _render_outputs(
 
     if OutputFormat.DECK in intent.output_formats:
         try:
-            deck_structure = shape_deck(client, intent, analysis, use_thinking=think)
-            deck = build_deck(deck_structure, config, out_dir, analysis=analysis)
+            deck_structure = shape_deck(
+                client, intent, analysis, use_thinking=think, propose_visuals=propose_visuals
+            )
+            deck_structure = attach_deck_visuals(deck_structure, analysis, report, style)
+            deck = build_deck(
+                deck_structure, config, out_dir, analysis=analysis, research_report=report
+            )
             files.append(deck)
             interaction.notify(
                 _t(intent.language, f"Deck erstellt: {deck}", f"Deck created: {deck}")
@@ -622,7 +643,10 @@ def run_pipeline(
         )
 
     # Render the routed deliverables (PDF / PPTX / Excel) — Business Case = Deck + Excel (N-6).
-    output_files = _render_outputs(client, config, intent, analysis, interaction, effort_cfg)
+    # The research report is threaded in so telemetry chips + grounded charts go live (Block 4).
+    output_files = _render_outputs(
+        client, config, intent, analysis, interaction, effort_cfg, report=report
+    )
 
     # Showcase: if this run's deck beats the published demo's critic score, swap the README's
     # "best demo output" link and push it (fail-open; demos are test runs). N/A when no deck.

@@ -1,0 +1,21 @@
+{#
+  Editorial brief header (Block 3). Included (not imported) so it reads the design tokens that
+  ``core.exporter._brief_context`` injects straight from the render context: the luminous cover
+  band (DNA 5, editorial only), the two-tone serif headline with one token in the coral spot color
+  (DNA 7), the mono meta line, and the source-grounded telemetry chips (DNA 6, only when a research
+  report is threaded in). ``cover_band_svg`` and ``logo_data_uri`` are built/trusted in Python
+  (``| safe``); the title parts and chips are auto-escaped.
+#}
+{% if cover_band_svg %}{{ cover_band_svg | safe }}{% endif %}
+<div class="head">
+  <div class="titles">
+    <h1>{{ title_before }}{% if title_hl %}<span class="hl">{{ title_hl }}</span>{% endif %}{{ title_after }}</h1>
+    <div class="meta">{{ meta }}</div>
+    {% if telemetry %}
+    <div class="telemetry">
+      {% for chip in telemetry %}<span class="chip">{{ chip }}</span>{% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% if logo_data_uri %}<img class="logo" src="{{ logo_data_uri | safe }}" alt="NEURA">{% endif %}
+</div>

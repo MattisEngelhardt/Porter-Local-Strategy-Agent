@@ -42,6 +42,17 @@ data/cache/
 # Machine-specific porter pre-launch hook (e.g. auto-start LM Studio) — local only
 porter.local.ps1
 
+# Editorial OFL fonts — fetched locally via `scripts/install_fonts.py`, not vendored as binaries
+# (REQ-1/2: local/free/OFL). Absent dir → renderers degrade to system fonts (REQ-5). README stays.
+assets/fonts/*.ttf
+assets/fonts/*.otf
+assets/fonts/*.woff
+assets/fonts/*.woff2
+assets/fonts/*-OFL.txt
+
+# Throwaway Block-4 verification drivers (local-only smoke tests, not part of the suite)
+scripts/_*.py
+
 # Logs
 logs/
 

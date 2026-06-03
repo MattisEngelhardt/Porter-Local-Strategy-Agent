@@ -9,6 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from core import pipeline as pipeline_mod
 from core.config import AppConfig
 from core.memory import MemoryLayerError, MemoryRecord
 from core.pipeline import AutoInteraction, plan_subqueries, run_pipeline
@@ -19,6 +22,7 @@ from models.research import (
     ResearchReport,
     WorkerFindings,
 )
+from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import EffortLevel, Intent, Language, OutputFormat, TaskRequest, TaskType
 
 _PASS_CRITIQUE = '{"score": 90, "criteria": [], "issues": [], "summary": "Strong."}'
@@ -172,6 +176,97 @@ def test_run_pipeline_full_analysis(tmp_path: Path) -> None:
     assert result.research_report.workers_used == 3
     assert result.critique is not None and result.critique.passed
     assert result.revisions == 0
+
+
+def _analysis_out() -> AnalysisOutput:
+    """A minimal analysis for the render-wiring unit test."""
+    return AnalysisOutput(
+        title="1X Brief",
+        language=Language.EN,
+        bottom_line="Bottom line.",
+        sections=[Section(heading="Tech", body="x")],
+        sources=[SourceRef(url="https://reuters.com/a")],
+    )
+
+
+def test_render_outputs_threads_report_into_both_renderers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Block-4 must-do: the manager's ResearchReport reaches BOTH build_brief_pdf and build_deck."""
+    captured: dict[str, Any] = {}
+
+    def fake_brief(
+        analysis: Any,
+        config: Any,
+        output_dir: Any,
+        *,
+        task_type: Any,
+        audience: Any = None,
+        research_report: Any = None,
+    ) -> Path:
+        captured["brief_report"] = research_report
+        path = Path(output_dir) / "brief.pdf"
+        path.write_text("x", encoding="utf-8")
+        return path
+
+    def fake_deck(
+        deck: Any,
+        config: Any,
+        output_dir: Any,
+        analysis: Any = None,
+        research_report: Any = None,
+    ) -> Path:
+        captured["deck_report"] = research_report
+        path = Path(output_dir) / "deck.pptx"
+        path.write_text("x", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(pipeline_mod, "build_brief_pdf", fake_brief)
+    monkeypatch.setattr(pipeline_mod, "build_deck", fake_deck)
+
+    report = _report()
+    intent = _intent(output_formats=[OutputFormat.BRIEF, OutputFormat.DECK])
+    effort_cfg = AppConfig().effort.level_for("high")
+    files = pipeline_mod._render_outputs(
+        _ScriptedClient(intent="{}"),  # type: ignore[arg-type]
+        _config(tmp_path),
+        intent,
+        _analysis_out(),
+        AutoInteraction(),
+        effort_cfg,
+        report=report,
+    )
+    assert captured["brief_report"] is report  # telemetry chips + grounded charts go live (brief)
+    assert captured["deck_report"] is report  # ... and the deck
+    assert len(files) == 2
+
+
+def test_run_pipeline_renders_live_telemetry_chips_in_deck(tmp_path: Path) -> None:
+    """End-to-end: the report's real counts render as telemetry chips on the .pptx (DNA 6)."""
+    pptx = pytest.importorskip("pptx")
+    client = _ScriptedClient(
+        intent='{"task_type":"business_case","depth":"deep","audience":"ceo_board","summary":"Japan BC"}',  # noqa: E501
+        subqueries='["japan market size"]',
+        analysis='{"title":"BC","bottom_line":"b","sections":[{"heading":"h","body":"x"}],"sources":[{"url":"https://reuters.com/a"}]}',  # noqa: E501
+    )
+    result = run_pipeline(
+        client,  # type: ignore[arg-type]
+        _config(tmp_path),
+        TaskRequest(raw_input="Business case for Japan expansion: market size, investment, ROI"),
+        AutoInteraction(),
+        manager=_FakeManager(_report()),  # type: ignore[arg-type]
+    )
+    decks = [p for p in result.output_files if p.suffix == ".pptx"]
+    assert decks, "a deck should have been rendered"
+    prs = pptx.Presentation(str(decks[0]))
+    text = " ".join(
+        shape.text_frame.text
+        for slide in prs.slides
+        for shape in slide.shapes
+        if shape.has_text_frame
+    )
+    assert "SOURCES 12" in text  # report.sources_evaluated reached the renderer
+    assert "WORKERS 3" in text  # report.workers_used reached the renderer
 
 
 def test_run_pipeline_scoping_guidance_shapes_research_and_synthesis(tmp_path: Path) -> None:
