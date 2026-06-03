@@ -174,8 +174,10 @@ def test_compile_cited_sources_dedups_and_merges_provenance() -> None:
             WorkerFindings(
                 sub_topic="funding",
                 findings=[
-                    Finding(claim="raised $100M", source_url="https://reuters.com/a", date="2026-03"),
-                    Finding(claim="hq move", source_url="https://reuters.com/a/"),  # trailing-slash dup
+                    Finding(
+                        claim="raised $100M", source_url="https://reuters.com/a", date="2026-03"
+                    ),
+                    Finding(claim="hq move", source_url="https://reuters.com/a/"),  # slash dup
                     Finding(claim="founder quote", source_url="https://blog.example/post"),
                 ],
                 sources=[
@@ -205,9 +207,11 @@ def test_compile_cited_sources_dedups_and_merges_provenance() -> None:
 
 
 def test_synthesize_always_merges_cited_sources_with_sparse_llm() -> None:
-    """Regression for the '<5 sources' bug: the belegt set is merged even when the LLM cites a few."""
+    """Regression for the '<5 sources' bug: the belegt set merges even when the LLM cites a few."""
     cited = [
-        SourceRef(url="https://reuters.com/a", title="Reuters A", date="2026-03", tier=SourceTier.TIER_1),
+        SourceRef(
+            url="https://reuters.com/a", title="Reuters A", date="2026-03", tier=SourceTier.TIER_1
+        ),
         SourceRef(url="https://crunchbase.com/org/x", tier=SourceTier.TIER_2),
     ]
     response = json.dumps(
@@ -231,10 +235,15 @@ def test_synthesize_always_merges_cited_sources_with_sparse_llm() -> None:
 
 
 def test_cited_sources_empty_falls_back_to_research_then_merges_llm() -> None:
-    """With no belegt set, the read research is the deterministic base, still merged with LLM extras."""
+    """With no belegt set, the read research is the deterministic base, still merged with LLM."""
     si = _si(research=[FetchedContent(url="https://ft.com/a", title="FT", text="t")])
     response = json.dumps(
-        {"title": "T", "bottom_line": "BL", "sections": [], "sources": [{"url": "https://llm.example/z"}]}
+        {
+            "title": "T",
+            "bottom_line": "BL",
+            "sections": [],
+            "sources": [{"url": "https://llm.example/z"}],
+        }
     )
     out = synthesize(_CaptureClient(response), si)  # type: ignore[arg-type]
     urls = [r.url for r in out.sources]
