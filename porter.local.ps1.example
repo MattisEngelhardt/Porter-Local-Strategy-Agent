@@ -6,15 +6,28 @@
 # setup never lands in the repo, and a fresh clone has no hook (Ollama needs none).
 #
 # This template covers LM Studio, which (unlike Ollama) does not auto-serve. When config.yaml
-# is on the LM Studio backend it: (1) starts the LM Studio server if it is down, and (2) loads
-# the configured model if it isn't already served — then the agent launches. Idempotent + fast:
-# if the server is up and the model is loaded, it does nothing. No-ops on the Ollama backend.
+# is on the LM Studio backend it brings the backend up *perfectly* from a cold start:
+#   1. starts the headless 'llmster' daemon + HTTP server (lms daemon up / server start),
+#      or launches the LM Studio app as a fallback, if nothing is serving,
+#   2. loads the configured chat model — and if the load fails because the selected
+#      inference runtime can't handle the model (e.g. a llama.cpp runtime regression that
+#      can't read a model's vision projector: "clip.cpp: Unknown projector type"), it
+#      AUTOMATICALLY walks the installed runtimes (best GPU engine first, known-broken ones
+#      skipped) until one actually loads + serves the model,
+#   3. verifies with a real chat request (never trusts a half-loaded "ghost" entry),
+#   4. pre-loads the embedding model so persistent memory / RAG works immediately.
+# Idempotent + fast: if the model is already serving, it returns in well under a second.
+# No-ops on the Ollama backend. Safe to run standalone:  & .\porter.local.ps1
+#
+# TIP (desktop / GUI machines): the most bulletproof setup is to enable "Run the LLM server
+# on login" in LM Studio settings (Ctrl+,). The server then stays in the tray and auto-starts
+# on login, so the backend is always up and this hook only ever has to load the model.
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $configPath = Join-Path $root "config.yaml"
 
-# --- read provider / model / num_ctx from the llm: block of config.yaml ---
+# --- read provider / model / num_ctx / embedding_model from the llm: block of config.yaml ---
 $raw = [System.IO.File]::ReadAllText($configPath)
 $llm = [regex]::Match($raw, '(?ms)^llm:.*?(?=^\S)').Value
 function Read-LlmField([string]$key) {
@@ -26,35 +39,168 @@ function Read-LlmField([string]$key) {
 $provider = Read-LlmField "provider"
 if ($provider -ne "lmstudio") { return }   # Ollama (or anything else): nothing to do here
 
-$modelId = Read-LlmField "model"            # the served identifier (== llm.model in config)
-$ctx = Read-LlmField "num_ctx"
+$modelId        = Read-LlmField "model"            # the served identifier (== llm.model in config)
+$ctx            = Read-LlmField "num_ctx"
 if (-not $ctx) { $ctx = "32768" }
+$embeddingModel = Read-LlmField "embedding_model"  # tiny CPU model; pre-loaded for memory/RAG
 
 # If you renamed the model with a custom --identifier (so llm.model is NOT a real downloaded
 # model key), set the underlying model key here. Leave "" to load llm.model directly.
 $baseModel = ""                             # e.g. "google/gemma-4-e4b"
 
-$lms = Join-Path $HOME ".lmstudio\bin\lms.exe"
-$api = "http://localhost:1234/v1/models"
+$lms     = Join-Path $HOME ".lmstudio\bin\lms.exe"
+$apiBase = "http://localhost:1234/v1"
+if (-not (Test-Path $lms)) { Write-Warning "[porter] LM Studio CLI not found at $lms - skipping auto-boot."; return }
 
-# --- 1. probe the server once (tolerant timeout); start it only if truly down ---
-$ids = $null
-try { $ids = (Invoke-RestMethod -Uri $api -TimeoutSec 5).data.id } catch { }
-if ($null -eq $ids) {
-    Write-Host "[porter] starting LM Studio server..." -ForegroundColor Cyan
-    & $lms server start | Out-Null
-    $ids = @()
-    try { $ids = (Invoke-RestMethod -Uri $api -TimeoutSec 8).data.id } catch { }
+# Optional inference-runtime guardrails. If a specific runtime version is known-good for your
+# model, name it in $preferredRuntime (tried first on a cold load). List any version known to
+# break your model in $brokenRuntimes (never selected). Both may be empty — the self-heal loop
+# then simply tries every installed runtime, best GPU engine first, until one loads + serves.
+$preferredRuntime = ""                      # e.g. "llama.cpp-win-x86_64-nvidia-cuda12-avx2@2.18.0"
+$brokenRuntimes   = @()                     # e.g. @("llama.cpp-win-x86_64-nvidia-cuda12-avx2@2.20.0")
+
+# --- helpers ---------------------------------------------------------------
+# Run lms discarding all output, NEVER terminating on native stderr (PS 5.1 wraps native
+# stderr as a terminating error under EAP=Stop); return the process exit code.
+function Invoke-Lms {
+    param([string[]] $LmsArgs)
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { & $lms @LmsArgs 2>&1 | Out-Null } finally { $ErrorActionPreference = $prev }
+    return $LASTEXITCODE
 }
 
-# --- 2. load the configured model only if it isn't already served ---
+# Run lms and return its stdout lines (for parsing), without terminating on stderr.
+function Get-LmsLines {
+    param([string[]] $LmsArgs)
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    try { $out = & $lms @LmsArgs 2>$null } finally { $ErrorActionPreference = $prev }
+    return $out
+}
+
+function Get-ServedIds {
+    # Models the OpenAI-compatible API actually serves. $null = server unreachable;
+    # @() = server up but nothing loaded. Ghost/half-loaded instances do NOT appear here.
+    try { $r = Invoke-RestMethod -Uri "$apiBase/models" -TimeoutSec 5 } catch { return $null }
+    return @($r.data.id)
+}
+
+function Test-ModelResponds {
+    # Ground-truth health check: a real chat completion to $modelId must return HTTP 200.
+    $body = @{ model = $modelId; messages = @(@{ role = "user"; content = "ok" }); max_tokens = 16; temperature = 0 } | ConvertTo-Json -Depth 5
+    try { Invoke-RestMethod -Uri "$apiBase/chat/completions" -Method Post -Body $body -ContentType "application/json" -TimeoutSec 90 | Out-Null; return $true }
+    catch { return $false }
+}
+
+function Wait-Server([int]$seconds) {
+    # Poll the API until it serves (returns the id list) or the deadline passes ($null).
+    for ($i = 0; $i -lt $seconds; $i++) { $x = Get-ServedIds; if ($null -ne $x) { return $x }; Start-Sleep -Seconds 1 }
+    return $null
+}
+
+function Get-LmStudioExe {
+    foreach ($p in @(
+            (Join-Path $env:LOCALAPPDATA "Programs\LM Studio\LM Studio.exe"),
+            (Join-Path ${env:ProgramFiles} "LM Studio\LM Studio.exe"),
+            (Join-Path ${env:ProgramW6432} "LM Studio\LM Studio.exe"))) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    return ""
+}
+
+function Start-Backend {
+    # Bring the LM Studio backend up from any state. LM Studio 0.4+ has a headless 'llmster'
+    # core, but it is OPT-IN — if it was never installed there is no daemon to wake and
+    # 'lms daemon up' / 'lms server start' just time out. So only take the CLI daemon path
+    # when llmster is actually installed (or the GUI app — which hosts the daemon — is
+    # already running); otherwise go straight to launching the desktop app. With "Run the
+    # LLM server on login" enabled in LM Studio, the server is already up after login and
+    # this whole function is skipped (the API answers immediately). Returns ids or $null.
+    $llmsterInstalled = Test-Path (Join-Path $HOME ".lmstudio\.internal\llmster-install-location.json")
+    $appRunning = [bool](Get-Process -Name 'LM Studio*' -ErrorAction SilentlyContinue)
+    if ($llmsterInstalled -or $appRunning) {
+        $null = Invoke-Lms @('daemon', 'up')
+        $null = Invoke-Lms @('server', 'start')
+        $x = Wait-Server 20
+        if ($null -ne $x) { return $x }
+    }
+
+    $exe = Get-LmStudioExe
+    if (-not $exe) { Write-Warning "[porter] LM Studio not reachable and LM Studio.exe not found."; return $null }
+    Write-Host "[porter] launching the LM Studio app to start the backend..." -ForegroundColor Cyan
+    Start-Process -FilePath $exe | Out-Null
+    $x = $null
+    for ($i = 0; $i -lt 45 -and $null -eq $x; $i++) {  # ~90s for the app + server to come up
+        Start-Sleep -Seconds 2
+        if ($i -eq 6) { $null = Invoke-Lms @('server', 'start') }   # nudge the HTTP server once the app is up
+        $x = Get-ServedIds
+    }
+    return $x
+}
+
+function Get-RuntimeRank([string]$a) {
+    if ($a -match 'cuda12') { return 0 } elseif ($a -match 'cuda') { return 1 }
+    elseif ($a -match 'vulkan') { return 2 } else { return 3 }
+}
+function Get-RuntimeVer([string]$a) { try { return [version](($a -split '@')[-1]) } catch { return [version]"0.0.0" } }
+
+function Get-RuntimeCandidates {
+    # Installed GGUF engines in preferred boot order, known-broken ones removed:
+    # preferred first, then cuda12 > cuda > vulkan > cpu(avx2), newest version within a class.
+    $aliases = @()
+    foreach ($line in (Get-LmsLines @('runtime', 'ls'))) {
+        $m = [regex]::Match([string]$line, '(llama\.cpp[^\s]*@[0-9][^\s]*)')
+        if ($m.Success) { $aliases += $m.Groups[1].Value }
+    }
+    $aliases = @($aliases | Where-Object { $brokenRuntimes -notcontains $_ } | Select-Object -Unique)
+    $ordered = @($aliases | Sort-Object @{ e = { Get-RuntimeRank $_ } }, @{ e = { Get-RuntimeVer $_ }; Descending = $true })
+    $result = @()
+    if ($preferredRuntime -and ($aliases -contains $preferredRuntime)) { $result += $preferredRuntime }
+    foreach ($a in $ordered) { if ($a -ne $preferredRuntime) { $result += $a } }
+    return $result
+}
+
+function Invoke-Load {
+    # Load the model under $modelId; success = exit 0 AND served AND actually responds.
+    # If $baseModel is set, llm.model is a custom identifier for it; else load it directly.
+    if ($baseModel) { $a = @('load', $baseModel, '--identifier', $modelId, '--context-length', $ctx, '--gpu', 'max', '-y') }
+    else            { $a = @('load', $modelId,   '--context-length', $ctx, '--gpu', 'max', '-y') }
+    if ((Invoke-Lms $a) -ne 0) { return $false }
+    if ((Get-ServedIds) -notcontains $modelId) { return $false }
+    return (Test-ModelResponds)
+}
+
+# --- 1. ensure the server is up (cold start: launch the backend if needed) ---
+$ids = Get-ServedIds
+if ($null -eq $ids) {
+    Write-Host "[porter] starting LM Studio..." -ForegroundColor Cyan
+    $ids = Start-Backend
+    if ($null -eq $ids) { $ids = @() }
+}
+
+# --- 2. load the chat model only if it isn't already serving ---------------
 if ($ids -notcontains $modelId) {
-    Write-Host "[porter] loading '$modelId' into LM Studio (~8s, one-time per session)..." -ForegroundColor Cyan
-    if ($baseModel) {
-        & $lms load $baseModel --identifier $modelId --context-length $ctx --gpu max -y | Out-Null
+    Write-Host "[porter] loading '$modelId' into LM Studio..." -ForegroundColor Cyan
+    $null = Invoke-Lms @('unload', '--all')   # clear any ghost holding the identifier + free VRAM
+
+    $loaded = Invoke-Load
+    if (-not $loaded) {
+        # The selected inference runtime can't load this model. Self-heal: walk the
+        # installed runtimes (good GPU engine first) until one loads + serves it.
+        foreach ($rt in (Get-RuntimeCandidates)) {
+            Write-Host "[porter] load failed on current runtime; trying $rt ..." -ForegroundColor Yellow
+            if ((Invoke-Lms @('runtime', 'select', $rt)) -ne 0) { continue }
+            $null = Invoke-Lms @('unload', '--all')
+            if (Invoke-Load) { $loaded = $true; Write-Host "[porter] recovered on runtime $rt." -ForegroundColor Green; break }
+        }
     }
-    else {
-        & $lms load $modelId --context-length $ctx --gpu max -y | Out-Null
+
+    if ($loaded) { Write-Host "[porter] model ready." -ForegroundColor Green }
+    else { Write-Warning "[porter] could not load '$modelId' on any installed runtime. Check ~/.lmstudio/server-logs for the engine error." }
+}
+
+# --- 3. best-effort: pre-load the embedding model for persistent memory / RAG ---
+if ($embeddingModel) {
+    if ((Get-ServedIds) -notcontains $embeddingModel) {
+        $null = Invoke-Lms @('load', $embeddingModel, '-y')   # small CPU model; ignore failure (memory degrades gracefully)
     }
-    Write-Host "[porter] model ready." -ForegroundColor Green
 }
