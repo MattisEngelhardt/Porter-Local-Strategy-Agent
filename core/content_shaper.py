@@ -18,6 +18,7 @@ from llm.local_llm_client import LLMError, LocalLLMClient
 from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput
 from models.task import Intent, Language, TaskType
+from models.visuals import ChartSeries, ChartSpec, ChartType
 from models.workbook import (
     BenchmarkData,
     BenchmarkRow,
@@ -72,6 +73,20 @@ _SCR_LINE = (
     "(>=3) -> Financial Case -> Recommendation (the SCR framework, analysis_playbook §13).\n"
 )
 
+# Folded data-visual instruction (server/ultra via the effort dial — see core.pipeline). The chart
+# rides along in the SAME shaping call (no extra LLM round-trip); the candidate is still grounded
+# against the analysis/evidence in core.visual_selector before it is ever charted.
+_VISUAL_INSTRUCTIONS = (
+    "\n\nDATA VISUAL (optional): for a slide whose message is a comparison, a time trend, or "
+    'shares of a whole built from numbers ALREADY in the analysis, add a "visual" object to that '
+    "slide (omit it otherwise — never invent a number):\n"
+    '"visual": {"chart_type": "column|bar|line|donut", "categories": ["label", ...], '
+    '"series": [{"name": "metric (unit)", "values": [<one number per category>]}], '
+    '"caption": "the so-what", "unit": "m|%|x|..."}\n'
+    "- >=2 categories; each series carries exactly one value per category; every value must appear "
+    "in the analysis. column/bar = comparison, line = time trend, donut = shares of a whole."
+)
+
 
 def _analysis_block(analysis: AnalysisOutput) -> str:
     """Render the analysis (title, bottom line, sections, sources) for the shaping prompt."""
@@ -115,6 +130,54 @@ def _coerce_table(value: object) -> list[list[str]] | None:
     return rows or None
 
 
+def _coerce_chart_type(value: object) -> ChartType:
+    """Coerce a raw chart-type value into :class:`ChartType` (defaults to COLUMN)."""
+    if isinstance(value, str):
+        try:
+            return ChartType(value.strip().lower())
+        except ValueError:
+            return ChartType.COLUMN
+    return ChartType.COLUMN
+
+
+def _coerce_series(value: object) -> list[ChartSeries]:
+    """Coerce a raw value into a list of :class:`ChartSeries` (values forced numeric)."""
+    series: list[ChartSeries] = []
+    for item in _as_list(value):
+        if not isinstance(item, dict):
+            continue
+        values = [_coerce_float(v) for v in _as_list(item.get("values"))]
+        series.append(ChartSeries(name=str(item.get("name") or "").strip(), values=values))
+    return series
+
+
+def _coerce_visual(value: object) -> ChartSpec | None:
+    """Coerce a folded-LLM ``visual`` object into a :class:`ChartSpec`, or ``None`` (fail-open).
+
+    The :class:`ChartSpec` model *is* the schema: a length-mismatched or otherwise unrenderable
+    candidate fails its validator and is dropped here, so only a parse-safe spec reaches the
+    grounding gate (:func:`core.visuals.validate_spec`) in ``core.visual_selector``. No number is
+    ever fabricated — invented values are caught later by grounding against the analysis/evidence.
+    """
+    if not isinstance(value, dict):
+        return None
+    categories = [str(c).strip() for c in _as_list(value.get("categories")) if str(c).strip()]
+    series = _coerce_series(value.get("series"))
+    if not categories or not series:
+        return None
+    try:
+        return ChartSpec(
+            chart_type=_coerce_chart_type(value.get("chart_type")),
+            categories=categories,
+            series=series,
+            caption=str(value.get("caption") or "").strip(),
+            unit=str(value.get("unit") or "").strip(),
+            source=str(value.get("source") or "").strip(),
+        )
+    except (ValueError, TypeError):
+        return None
+
+
 def _coerce_slides(array: list[object] | None, analysis: AnalysisOutput) -> list[SlideContent]:
     """Coerce the LLM's JSON array into validated :class:`SlideContent` objects (tolerant)."""
     if not array:
@@ -135,6 +198,7 @@ def _coerce_slides(array: list[object] | None, analysis: AnalysisOutput) -> list
                 bullets=_coerce_str_list(item.get("bullets")),
                 body=str(body).strip() if isinstance(body, str) and body.strip() else None,
                 table=_coerce_table(item.get("table")),
+                visual=_coerce_visual(item.get("visual")),
             )
         )
     return slides
@@ -146,10 +210,14 @@ def shape_deck(
     analysis: AnalysisOutput,
     *,
     use_thinking: bool = True,
+    propose_visuals: bool = False,
 ) -> DeckStructure:
     """Shape a prose analysis into a typed :class:`DeckStructure` via one LLM call (fail-open).
 
     Produces "so what" headlines and the right slide types (SCR ordering for a business case).
+    When ``propose_visuals`` is set (server/ultra via the effort dial — laptop default is off), the
+    shaper may also attach a ``visual`` chart spec to data slides *in the same call* (no extra LLM
+    round-trip); every candidate is still grounded in :mod:`core.visual_selector` before charting.
     Any LLM/parse failure — or an empty result — falls back to the deterministic
     :func:`~core.exporter.management_deck_structure` so delivery never blocks (SPEC REQ-5).
     """
@@ -160,6 +228,7 @@ def shape_deck(
         _DECK_SYSTEM.format(types=_SLIDE_TYPES, scr=scr, max=_MAX_SLIDES)
         + "\n\n"
         + framework_prompt(ArtifactKind.PPTX)
+        + (_VISUAL_INSTRUCTIONS if propose_visuals else "")
         + f"\nWrite ALL slide text in {language}."
     )
     try:
