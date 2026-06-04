@@ -17,7 +17,7 @@ from core.exporter import (
     build_management_pdf,
     render_brief_html,
 )
-from models.deck import DeckStructure, SlideContent, SlideType
+from models.deck import Archetype, DeckStructure, SlideContent, SlideType
 from models.research import Confidence, Finding, ResearchReport, WorkerFindings
 from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import Language, TaskType
@@ -353,10 +353,11 @@ def test_build_deck_with_analysis_applies_prerender_framework(tmp_path: Path) ->
 
 
 def test_build_deck_no_logo_when_disabled(tmp_path: Path) -> None:
-    """With include_logo off, no picture is added (the bottom-right logo is config-gated)."""
+    """With include_logo off and no cover image, no picture is added (logo is config-gated)."""
     pptx = pytest.importorskip("pptx")
     config = AppConfig()
     config.output.include_logo = False
+    config.output.imagery_dir = str(tmp_path / "no-imagery")  # empty → gradient cover, no picture
     path = build_deck(_full_deck(), config, tmp_path)
     prs = pptx.Presentation(str(path))
     assert all(all(shape.shape_type != 13 for shape in slide.shapes) for slide in prs.slides)
@@ -458,12 +459,39 @@ def test_build_deck_chart_budget_caps_visuals(tmp_path: Path) -> None:
 def test_title_cover_uses_dark_editorial_canvas(tmp_path: Path) -> None:
     """The cover sits on the dramatic ``canvas_dark`` editorial canvas with a luminous gradient."""
     pptx = pytest.importorskip("pptx")
-    colors = AppConfig().output.colors
-    path = build_deck(_full_deck(), AppConfig(), tmp_path)
+    config = AppConfig()
+    config.output.imagery_dir = str(tmp_path / "no-imagery")  # test the gradient cover path
+    colors = config.output.colors
+    path = build_deck(_full_deck(), config, tmp_path)
     prs = pptx.Presentation(str(path))
     background = prs.slides[0].background.fill.fore_color.rgb
     assert str(background) == colors.canvas_dark.lstrip("#").upper()
     assert _gradient_count(prs) >= 1  # editorial depth present on cover/divider
+
+
+def test_image_cover_uses_brand_image_when_present(tmp_path: Path) -> None:
+    """When the imagery library holds an image, the cover lays it full-bleed under a scrim."""
+    pptx = pytest.importorskip("pptx")
+    import base64
+
+    imagery = tmp_path / "imagery"
+    imagery.mkdir()
+    png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+    )
+    (imagery / "cover.png").write_bytes(png)
+    config = AppConfig()
+    config.output.imagery_dir = str(imagery)
+    config.output.include_logo = False  # isolate: the only picture should be the cover image
+    deck = DeckStructure(
+        title="Imaged",
+        language=Language.EN,
+        slides=[SlideContent(slide_type=SlideType.TITLE, headline="Cover")],
+    )
+    path = build_deck(deck, config, tmp_path)
+    prs = pptx.Presentation(str(path))
+    pictures = sum(1 for shape in prs.slides[0].shapes if shape.shape_type == 13)
+    assert pictures >= 1  # the brand image is laid on the cover
 
 
 def test_restrained_intensity_skips_gradient(tmp_path: Path) -> None:
@@ -471,6 +499,7 @@ def test_restrained_intensity_skips_gradient(tmp_path: Path) -> None:
     pptx = pytest.importorskip("pptx")
     config = AppConfig()
     config.output.style.intensity = "restrained"
+    config.output.imagery_dir = str(tmp_path / "no-imagery")  # gradient cover path, no image
     path = build_deck(_full_deck(), config, tmp_path / "restrained")
     prs = pptx.Presentation(str(path))
     assert _gradient_count(prs) == 0
@@ -479,20 +508,71 @@ def test_restrained_intensity_skips_gradient(tmp_path: Path) -> None:
     assert str(prs.slides[0].background.fill.fore_color.rgb) == canvas_dark
 
 
-def test_build_deck_renders_telemetry_chips(tmp_path: Path) -> None:
-    """Source-grounded telemetry chips render only when a research report is threaded in (DNA 6)."""
+def test_build_deck_telemetry_chips_opt_in_only(tmp_path: Path) -> None:
+    """Telemetry chips are OFF by default (removed from slides) and only render when opted in."""
     pptx = pytest.importorskip("pptx")
     report = _research_report()
-    path = build_deck(_full_deck(), AppConfig(), tmp_path / "with", research_report=report)
-    prs = pptx.Presentation(str(path))
-    all_text = _presentation_text(prs)
+
+    # Default: no chips on the deck even with a report threaded in (the user removed them).
+    path_default = build_deck(
+        _full_deck(), AppConfig(), tmp_path / "default", research_report=report
+    )
+    assert "SOURCES 22" not in _presentation_text(pptx.Presentation(str(path_default)))
+
+    # Opt-in (output.style.telemetry_chips=True): source-grounded chips render again (DNA 6).
+    config = AppConfig()
+    config.output.style.telemetry_chips = True
+    path = build_deck(_full_deck(), config, tmp_path / "with", research_report=report)
+    all_text = _presentation_text(pptx.Presentation(str(path)))
     assert "SOURCES 22" in all_text
     assert "WORKERS 3" in all_text
 
-    # No report → no chips (never invents telemetry).
-    path_without = build_deck(_full_deck(), AppConfig(), tmp_path / "without")
-    prs_without = pptx.Presentation(str(path_without))
-    assert "SOURCES 22" not in _presentation_text(prs_without)
+    # Opt-in but no report → still no chips (never invents telemetry).
+    path_without = build_deck(_full_deck(), config, tmp_path / "without")
+    assert "SOURCES 22" not in _presentation_text(pptx.Presentation(str(path_without)))
+
+
+def test_metric_regex_requires_a_unit_not_a_bare_ordinal() -> None:
+    """A hero metric needs a unit/currency; 'Focus Area 1' is an ordinal, not a metric (v3 bug)."""
+    from core.exporter import _METRIC_RE
+
+    assert (
+        _METRIC_RE.search("Focus Area 1 (Manufacturing)") is None
+    )  # bare ordinal → no hero number
+    assert _METRIC_RE.search("Raised $55M") is not None
+    assert _METRIC_RE.search("grew 40% YoY") is not None
+    assert _METRIC_RE.search("runway of 12 months") is not None
+
+
+def test_appendix_lists_all_cited_sources_not_just_two(tmp_path: Path) -> None:
+    """The bibliography lists every cited source (paginated), not the 2 an LLM echoed (v3 bug)."""
+    pptx = pytest.importorskip("pptx")
+    sources = [SourceRef(url=f"https://example.com/source-{i:02d}") for i in range(30)]
+    analysis = AnalysisOutput(
+        title="Big Source Base",
+        language=Language.EN,
+        bottom_line="Many sources support the case.",
+        sections=[Section(heading="A grounded finding", body="Detail with evidence.")],
+        sources=sources,
+    )
+    # A deck whose own appendix only echoed two of the thirty cited sources.
+    deck = DeckStructure(
+        title="Big Source Base",
+        language=Language.EN,
+        slides=[
+            SlideContent(slide_type=SlideType.TITLE, headline="Big Source Base"),
+            SlideContent(
+                slide_type=SlideType.APPENDIX,
+                headline="Sources",
+                bullets=["https://example.com/source-00", "https://example.com/source-01"],
+            ),
+        ],
+    )
+    path = build_deck(deck, AppConfig(), tmp_path, analysis=analysis)
+    text = _presentation_text(pptx.Presentation(str(path)))
+    # All 30 cited sources made it in (not just the 2 the LLM echoed), paginated across slides.
+    assert sum(f"source-{i:02d}" in text for i in range(30)) == 30
+    assert "Sources (1/2)" in text and "Sources (2/2)" in text
 
 
 def test_headline_two_tone_splits_numeric_token(tmp_path: Path) -> None:
@@ -515,6 +595,126 @@ def test_headline_two_tone_splits_numeric_token(tmp_path: Path) -> None:
                 headline_runs = shape.text_frame.paragraphs[0].runs
     assert len(headline_runs) >= 2  # split into base + accent runs
     assert any(str(run.font.color.rgb) == coral for run in headline_runs)  # token in spot color
+
+
+def test_archetypes_render_and_serif_is_visible(tmp_path: Path) -> None:
+    """Each Editorial v4 archetype renders valid slides and the serif face shows in the deck."""
+    pptx = pytest.importorskip("pptx")
+    slides = [
+        SlideContent(slide_type=SlideType.TITLE, headline="Cover"),
+        SlideContent(
+            slide_type=SlideType.STRATEGIC_SIGNALS,
+            headline="A loud claim",
+            body="One bold line.",
+            archetype=Archetype.STATEMENT,
+        ),
+        SlideContent(
+            slide_type=SlideType.STRATEGIC_SIGNALS,
+            headline="Numbers",
+            bullets=["Revenue €40m", "Users 12k", "Margin 30%"],
+            archetype=Archetype.METRIC_HERO,
+        ),
+        SlideContent(
+            slide_type=SlideType.STRATEGIC_SIGNALS,
+            headline="Four blocks",
+            bullets=["alpha one", "beta two", "gamma three", "delta four"],
+            archetype=Archetype.COLORBLOCK_GRID,
+        ),
+        SlideContent(
+            slide_type=SlideType.MARKET_LANDSCAPE,
+            headline="Editorial split here",
+            body="A supporting paragraph of context.",
+            bullets=["x point", "y point"],
+            archetype=Archetype.EDITORIAL_SPLIT,
+        ),
+        SlideContent(
+            slide_type=SlideType.RECOMMENDATION,
+            headline="Decision",
+            body="Go now and move decisively.",
+            archetype=Archetype.QUOTE,
+        ),
+    ]
+    deck = DeckStructure(title="Archetypes", language=Language.EN, slides=slides)
+    path = build_deck(deck, AppConfig(), tmp_path)
+    prs = pptx.Presentation(str(path))
+    assert len(prs.slides) >= len(slides)  # prepare-for-render may add an exec-summary slide
+    text = _presentation_text(prs)
+    assert "A loud claim" in text and "Editorial split here" in text
+    # The serif family (Fraunces) now appears in the deck via quote/split/statement (multi-font).
+    assert any(getattr(run.font, "name", None) == "Fraunces" for run in _all_runs(prs))
+    # The colorblock grid paints saturated cards (≥1 shape filled with a statement field color).
+    from core.design import statement_fields
+
+    fields = {f.lstrip("#").upper() for f in statement_fields(AppConfig().output.colors)}
+    fills: set[str] = set()
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            try:
+                fills.add(str(shape.fill.fore_color.rgb))
+            except (AttributeError, TypeError, ValueError):
+                continue
+    assert fields & fills  # at least one saturated statement-field block was painted
+
+
+def test_archetype_failure_falls_back_to_content(tmp_path: Path, monkeypatch: object) -> None:
+    """A raising archetype degrades to the content slide — the deck never loses it (REQ-5)."""
+    pptx = pytest.importorskip("pptx")
+    from core.exporter import _DeckRenderer
+
+    def boom(self: object, *args: object, **kwargs: object) -> None:
+        raise RuntimeError("archetype blew up")
+
+    monkeypatch.setattr(_DeckRenderer, "_colorblock_grid_slide", boom)  # type: ignore[attr-defined]
+    deck = DeckStructure(
+        title="Resilient",
+        language=Language.EN,
+        slides=[
+            SlideContent(slide_type=SlideType.TITLE, headline="Cover"),
+            SlideContent(
+                slide_type=SlideType.STRATEGIC_SIGNALS,
+                headline="Grid claim survives",
+                bullets=["a one", "b two", "c three"],
+                archetype=Archetype.COLORBLOCK_GRID,
+            ),
+        ],
+    )
+    path = build_deck(deck, AppConfig(), tmp_path)
+    prs = pptx.Presentation(str(path))
+    assert "Grid claim survives" in _presentation_text(prs)  # fallback still rendered the slide
+
+
+def test_restrained_collapses_statement_to_calm_canvas(tmp_path: Path) -> None:
+    """In restrained mode a forced STATEMENT collapses to calm content on a light canvas."""
+    pptx = pytest.importorskip("pptx")
+    config = AppConfig()
+    config.output.style.intensity = "restrained"
+    deck = DeckStructure(
+        title="Calm",
+        language=Language.EN,
+        slides=[
+            SlideContent(slide_type=SlideType.TITLE, headline="Cover"),
+            SlideContent(
+                slide_type=SlideType.STRATEGIC_SIGNALS,
+                headline="Would be loud",
+                body="bold",
+                archetype=Archetype.STATEMENT,
+            ),
+        ],
+    )
+    path = build_deck(deck, config, tmp_path)
+    prs = pptx.Presentation(str(path))
+    # Locate the collapsed statement slide by its headline (prepare-for-render may add slides).
+    target = next(
+        s
+        for s in prs.slides
+        if "Would be loud" in " ".join(sh.text_frame.text for sh in s.shapes if sh.has_text_frame)
+    )
+    bg = str(target.background.fill.fore_color.rgb)
+    light = {
+        config.output.colors.paper.lstrip("#").upper(),
+        config.output.colors.sand.lstrip("#").upper(),
+    }
+    assert bg in light  # calm cream/sand canvas, not a saturated field
 
 
 def test_deck_shapes_are_valid_ooxml(tmp_path: Path) -> None:

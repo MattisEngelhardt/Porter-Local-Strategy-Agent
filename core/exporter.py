@@ -30,7 +30,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
-from core import design, visuals
+from core import deck_director, design, imagery, visuals
 from core.artifact_framework import (
     brief_frame_context,
     deck_frame_label,
@@ -39,7 +39,9 @@ from core.artifact_framework import (
     prepare_deck_for_render,
 )
 from core.config import AppConfig, ColorsConfig, StyleConfig
-from models.deck import DeckStructure, SlideContent, SlideType
+from core.deck_director import SlidePlan
+from models.deck import Archetype, DeckStructure, SlideContent, SlideType
+from models.diagram import DiagramNode, DiagramSpec, DiagramType
 from models.research import ResearchReport
 from models.synthesis import AnalysisOutput
 from models.task import Audience, Language, TaskType
@@ -253,8 +255,19 @@ def _font_face_css(style: StyleConfig) -> str:
     fonts_dir = Path(style.fonts_dir)
     if not fonts_dir.is_dir():
         return ""
+    # Embed both the legacy configured families and every family of the active type-theme (so the
+    # serif/expressive faces a deck/brief actually uses are subset-embedded into the PDF).
+    theme_families = tuple(design.deck_fonts(style).values())
     families = dict.fromkeys(
-        f for f in (style.serif_font, style.grotesk_font, style.body_font, style.mono_font) if f
+        f
+        for f in (
+            style.serif_font,
+            style.grotesk_font,
+            style.body_font,
+            style.mono_font,
+            *theme_families,
+        )
+        if f
     )
     candidates = sorted(p for p in fonts_dir.iterdir() if p.suffix.lower() in _FONT_EXTS)
     blocks: list[str] = []
@@ -469,8 +482,14 @@ _SLIDE_W_IN = 13.333  # 16:9 widescreen
 _SLIDE_H_IN = 7.5
 # SWOT quadrant fills (Strengths/Opportunities = positive, Weaknesses/Threats = risk).
 _SWOT_FILLS = ("excel_positive", "excel_negative", "excel_positive", "excel_negative")
+# A *hero* metric must carry a currency or a unit — a bare integer like the "1" in "Focus Area 1" is
+# a list ordinal, NOT a metric, so it never gets promoted to a giant accent numeral (the v3 bug).
+# Units are ordered longest-first with a trailing word boundary (so "months" is not sliced to "m").
 _METRIC_RE = re.compile(
-    r"(?:EUR|USD|GBP|[$])?\s*\b\d[\d.,]*(?:\s?(?:%|x|m|bn|b|mio|million|billion|mo|months?|years?))?",
+    r"(?:(?:EUR|USD|GBP)\s?|[$€£]\s?)\d[\d.,]*"  # currency-prefixed amount
+    r"|"
+    # number + unit (units longest-first, alpha ones need a \b so "months" is not sliced to "m")
+    r"\d[\d.,]*\s?(?:%|x|(?:million|billion|months?|years?|mio|bn|EUR|USD|GBP|k|m|b)\b)",
     re.IGNORECASE,
 )
 
@@ -500,7 +519,7 @@ class _DeckRenderer:
             from pptx import Presentation
             from pptx.dml.color import RGBColor
             from pptx.enum.shapes import MSO_SHAPE
-            from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+            from pptx.enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, PP_ALIGN
             from pptx.oxml import parse_xml
             from pptx.oxml.ns import nsdecls, qn
             from pptx.util import Inches, Pt
@@ -511,6 +530,7 @@ class _DeckRenderer:
         self._MSO_SHAPE = MSO_SHAPE
         self._PP_ALIGN = PP_ALIGN
         self._MSO_ANCHOR = MSO_ANCHOR
+        self._MSO_AUTO_SIZE = MSO_AUTO_SIZE
         self._Inches = Inches
         self._Pt = Pt
         self._parse_xml = parse_xml
@@ -525,8 +545,12 @@ class _DeckRenderer:
         self._font_display = fonts["display"]
         self._font_body = fonts["body"]
         self._font_mono = fonts["mono"]
+        self._font_serif = fonts.get("serif", fonts["display"])
+        self._font_statement = fonts.get("statement", fonts["display"])
         self._charts_used = 0
         self._max_charts = self.style.max_charts_per_deck
+        self._diagrams_used = 0
+        self._max_diagrams = self.style.max_diagrams_per_deck
         self._slide_no = 0
         # Per-slide canvas state (set by ``_frame`` / ``_title_slide``): foreground color and
         # whether the slide sits on the dark editorial canvas (so headline/labels stay legible).
@@ -539,23 +563,33 @@ class _DeckRenderer:
         logo = Path(config.output.logo_path)
         self._show_logo = config.output.include_logo and logo.is_file()
         self._logo = str(logo)
+        light = config.output.logo_path_light
+        self._logo_light = str(light) if light and Path(light).is_file() else None
+        self._imagery_dir = config.output.imagery_dir
 
     def rgb(self, hex_color: str) -> Any:
         """A pptx ``RGBColor`` from a ``#rrggbb`` string (config-driven palette)."""
         return self._RGBColor.from_string(hex_color.lstrip("#").upper())  # type: ignore[no-untyped-call]
 
     def _add_logo(self, slide: Any) -> None:
-        """Place the Neura logo flush with the right edge of the slide, bottom-right corner."""
+        """Place the Neura logo bottom-right: width-capped, inset with a margin, light on dark.
+
+        The width cap stops a wide logo from sprawling across the slide, and the bottom-right inset
+        keeps it clear of the bottom-left page number (the v3 output stacked them). On a dark canvas
+        a configured light logo variant is used so the mark does not vanish (Block 5.0).
+        """
         if not self._show_logo:
             return
         inches = self._Inches
-        pic = slide.shapes.add_picture(
-            self._logo,
-            0,
-            inches(_SLIDE_H_IN) - inches(0.8),
-            height=inches(0.4),
-        )
-        pic.left = self.prs.slide_width - pic.width
+        path = self._logo_light if (self._slide_on_dark and self._logo_light) else self._logo
+        pic = slide.shapes.add_picture(path, 0, 0, height=inches(0.32))
+        max_w = inches(1.5)
+        if pic.width > max_w:
+            ratio = max_w / pic.width
+            pic.width = int(pic.width * ratio)
+            pic.height = int(pic.height * ratio)
+        pic.left = self.prs.slide_width - pic.width - inches(0.3)
+        pic.top = inches(_SLIDE_H_IN) - pic.height - inches(0.24)
 
     def _text(
         self,
@@ -730,17 +764,51 @@ class _DeckRenderer:
         except Exception:  # noqa: BLE001 — depth is decorative; never break a deck (REQ-5)
             pass
 
-    def _frame(self, slide: Any, sc: SlideContent) -> None:
-        """Apply the mandatory Porter Editorial frame to a non-title slide.
+    def _paint_cover_image(self, slide: Any, image_path: Any) -> None:
+        """Lay a full-bleed brand image under a dark scrim so the knockout title reads (fail-open).
 
-        Content slides sit on the cream ``paper`` canvas; the RECOMMENDATION decision slide becomes
-        a dramatic dark divider (editorial intensity) so the recommendation reads as a moment. Sets
-        the per-slide foreground color so headlines/labels stay legible on whichever canvas is used.
+        On any image error the cover degrades to the luminous gradient canvas (REQ-5).
+        """
+        inches = self._Inches
+        try:
+            slide_w = inches(_SLIDE_W_IN)
+            slide_h = inches(_SLIDE_H_IN)
+            # Cover-fit: scale to fill the 16:9 frame preserving aspect ratio (crop the overflow),
+            # centered — so a square brand photo is never squished. Add native, then resize/center.
+            pic = slide.shapes.add_picture(str(image_path), 0, 0)
+            if pic.width and pic.height:
+                scale = max(slide_w / pic.width, slide_h / pic.height)
+                pic.width = int(pic.width * scale)
+                pic.height = int(pic.height * scale)
+            pic.left = int((slide_w - pic.width) / 2)
+            pic.top = int((slide_h - pic.height) / 2)
+            scrim = self._rect(
+                slide, inches(0), inches(0), slide_w, slide_h, self.colors.canvas_dark
+            )
+            scrim.shadow.inherit = False
+            self._set_alpha(scrim, 55)
+        except Exception:  # noqa: BLE001 — a bad image never loses the cover (REQ-5)
+            self._paint_dark_canvas(slide, glow=True)
+
+    def _frame(self, slide: Any, sc: SlideContent, *, canvas_hex: str | None = None) -> None:
+        """Apply the mandatory Porter Editorial frame to a non-title slide on a given canvas.
+
+        ``canvas_hex`` is the design-director's chosen background (cream / sand / cream-hi, or the
+        dark divider for the recommendation). When omitted, content sits on cream and the
+        RECOMMENDATION slide becomes the dramatic dark divider. Sets the per-slide foreground color
+        so headlines/labels stay legible on whichever canvas is used.
         """
         inches = self._Inches
         self._slide_no += 1
-        on_dark = self._editorial and sc.slide_type == SlideType.RECOMMENDATION
-        canvas = self.colors.canvas_dark if on_dark else self.colors.paper
+        if canvas_hex is None:
+            canvas = (
+                self.colors.canvas_dark
+                if sc.slide_type == SlideType.RECOMMENDATION
+                else self.colors.paper
+            )
+        else:
+            canvas = canvas_hex
+        on_dark = design.luminance(canvas) < 0.55
         self._slide_on_dark = on_dark
         self._slide_fg = design.contrast_text(canvas, self.colors)
         muted = self.colors.light_surface if on_dark else self.colors.charcoal
@@ -774,20 +842,23 @@ class _DeckRenderer:
             bold=True,
             font=self._font_mono,
         )
+        # Page number bottom-LEFT (the bottom-right corner is reserved for the logo, so they never
+        # collide — the v3 output stacked the logo on top of the page number).
         self._text(
             slide,
             f"{self._slide_no:02d}",
-            inches(11.75),
+            inches(0.65),
             inches(6.98),
-            inches(0.45),
+            inches(0.5),
             inches(0.2),
             8,
             muted,
             bold=True,
-            align=self._PP_ALIGN.RIGHT,
+            align=self._PP_ALIGN.LEFT,
             font=self._font_mono,
         )
-        self._telemetry_footer(slide, color=muted)
+        if self.style.telemetry_chips:
+            self._telemetry_footer(slide, color=muted)
         self._add_logo(slide)
 
     def _telemetry_footer(self, slide: Any, *, color: str) -> None:
@@ -838,8 +909,8 @@ class _DeckRenderer:
         return " ".join(match.group(0).split())[:14]
 
     def _short(self, text: str, limit: int = 165) -> str:
-        """Keep card text inside fixed boxes."""
-        cleaned = " ".join(str(text).split())
+        """Keep card text inside fixed boxes (and defensively strip any leaked inline Markdown)."""
+        cleaned = design.strip_inline_markdown(text)
         return cleaned if len(cleaned) <= limit else cleaned[: limit - 3].rstrip(" ,;:") + "..."
 
     def _body_callout(
@@ -876,6 +947,9 @@ class _DeckRenderer:
         palette = design.chart_series_colors(self.colors)
         lines = [self._short(line) for line in (bullets or ["-"]) if str(line).strip()]
         lines = lines[:max_cards] or ["-"]
+        # With four long bullets the cards get too short to breathe — drop to three for legibility.
+        if len(lines) == 4 and max(len(s) for s in lines) > 150:
+            lines = lines[:3]
         count = len(lines)
         cols = 1 if count == 1 else 2
         rows = (count + cols - 1) // cols
@@ -964,33 +1038,41 @@ class _DeckRenderer:
                 font=self._font_mono,
             )
             body_top = y + 0.64
-        self._text(
+        # Dynamic size + autofit so a long bullet shrinks to fit instead of spilling past the card
+        # (the v3 overflow). The mono [NN] tag is only drawn when the card is tall enough to hold it
+        # without colliding with the body text.
+        show_tag = height >= 1.35
+        body_size = 12 if len(line) <= 130 else 11 if len(line) <= 185 else 10
+        reserve = 0.36 if show_tag else 0.14
+        body_box = self._text(
             slide,
             line,
             inches(left + 0.3),
             inches(body_top),
             inches(width - 0.6),
-            inches(max(0.4, height - (body_top - y) - 0.36)),
-            12,
+            inches(max(0.4, height - (body_top - y) - reserve)),
+            body_size,
             self.colors.ink,
         )
-        self._text(
-            slide,
-            f"[{index:02d}]",
-            inches(left + 0.3),
-            inches(y + height - 0.32),
-            inches(1.6),
-            inches(0.24),
-            8,
-            self.colors.charcoal,
-            bold=True,
-            font=self._font_mono,
-        )
+        body_box.text_frame.auto_size = self._MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        if show_tag:
+            self._text(
+                slide,
+                f"[{index:02d}]",
+                inches(left + 0.3),
+                inches(y + height - 0.30),
+                inches(1.6),
+                inches(0.22),
+                8,
+                self.colors.charcoal,
+                bold=True,
+                font=self._font_mono,
+            )
 
     def _compact_list(self, slide: Any, items: list[str], *, top: float = 1.75) -> None:
         """Render appendix/source lines in two dense but readable columns."""
         inches = self._Inches
-        lines = [self._short(item, 120) for item in (items or ["-"])][:14]
+        lines = [self._short(item, 120) for item in (items or ["-"])][:18]
         for idx, line in enumerate(lines):
             col = idx % 2
             row = idx // 2
@@ -1111,6 +1193,196 @@ class _DeckRenderer:
         shape.shadow.inherit = False
         return shape
 
+    # --- Editorial v4.0 shared helpers (archetypes + depth) ------------------------------
+    def _soft_shadow(self, shape: Any, *, blur_in: float = 0.07, dist_in: float = 0.05) -> None:
+        """Add a soft outer shadow into the shape's existing effectLst (editorial only, fail-open).
+
+        Mirrors :meth:`_soft_edge`'s single-effectLst discipline (a second ``<a:effectLst>`` is a
+        schema violation PowerPoint repairs away). Gives cards/tiles depth; never breaks a deck.
+        """
+        if not self._editorial:
+            return
+        try:
+            blur = int(blur_in * 914400)
+            dist = int(dist_in * 914400)
+            spPr = shape._element.spPr
+            effect_lst = spPr.find(self._qn("a:effectLst"))
+            if effect_lst is None:
+                effect_lst = self._parse_xml(f"<a:effectLst {self._nsdecls('a')}/>")
+                line_el = spPr.find(self._qn("a:ln"))
+                if line_el is not None:
+                    line_el.addnext(effect_lst)
+                else:
+                    spPr.append(effect_lst)
+            ink = self.colors.ink.lstrip("#").upper()
+            shadow = (
+                f'<a:outerShdw {self._nsdecls("a")} blurRad="{blur}" dist="{dist}" '
+                f'dir="5400000" rotWithShape="0"><a:srgbClr val="{ink}">'
+                f'<a:alpha val="28000"/></a:srgbClr></a:outerShdw>'
+            )
+            effect_lst.insert(0, self._parse_xml(shadow))
+        except Exception:  # noqa: BLE001 — depth is decorative; never break a deck (REQ-5)
+            pass
+
+    def _paint_field(self, slide: Any, field_hex: str) -> None:
+        """Paint a full-bleed saturated statement field; editorial adds a subtle duotone.
+
+        Sets the per-slide foreground to a legible knockout on the field. The duotone (field → a
+        slightly darker field) gives depth; restrained keeps a flat solid field.
+        """
+        background = slide.background
+        background.fill.solid()
+        background.fill.fore_color.rgb = self.rgb(field_hex)
+        self._slide_on_dark = design.luminance(field_hex) < 0.6
+        self._slide_fg = design.knockout_text(field_hex, self.colors)
+        if not self._editorial:
+            return
+        try:
+            inches = self._Inches
+            wash = self._rect(
+                slide, inches(0), inches(0), inches(_SLIDE_W_IN), inches(_SLIDE_H_IN), field_hex
+            )
+            wash.shadow.inherit = False
+            self._apply_gradient(wash, [(0.0, field_hex), (1.0, design.darken(field_hex, 16))])
+        except Exception:  # noqa: BLE001 — depth is decorative (REQ-5)
+            pass
+
+    def _display_headline(
+        self,
+        slide: Any,
+        text: str,
+        *,
+        left: float,
+        top: float,
+        width: float,
+        height: float,
+        size: int,
+        base_color: str,
+        accent_color: str,
+        serif_token: bool = False,
+        anchor: Any = None,
+    ) -> Any:
+        """Two-tone display headline; the accent token may render in the serif face (multi-font)."""
+        inches = self._Inches
+        before, token, after = design.split_for_highlight(text)
+        box = slide.shapes.add_textbox(inches(left), inches(top), inches(width), inches(height))
+        frame = box.text_frame
+        frame.word_wrap = True
+        if anchor is not None:
+            frame.vertical_anchor = anchor
+        para = frame.paragraphs[0]
+        para.alignment = self._PP_ALIGN.LEFT
+
+        def _run(segment: str, color: str, *, serif: bool = False) -> None:
+            run = para.add_run()
+            run.text = segment
+            run.font.size = self._Pt(size)
+            run.font.bold = True
+            run.font.name = self._font_serif if serif else self._font_display
+            run.font.color.rgb = self.rgb(color)
+
+        if token:
+            if before:
+                _run(before, base_color)
+            _run(token, accent_color, serif=serif_token)
+            if after:
+                _run(after, base_color)
+        else:
+            _run(text, base_color)
+        return box
+
+    def _big_number(
+        self,
+        slide: Any,
+        token: str,
+        label: str,
+        *,
+        left: float,
+        top: float,
+        width: float,
+        color: str,
+    ) -> None:
+        """A hero numeral (grotesk display) with a small mono-ish label beneath it."""
+        inches = self._Inches
+        self._text(
+            slide,
+            token,
+            inches(left),
+            inches(top),
+            inches(width),
+            inches(1.5),
+            92,
+            color,
+            bold=True,
+        )
+        if label:
+            self._text(
+                slide,
+                self._short(label, 60),
+                inches(left),
+                inches(top + 1.45),
+                inches(width),
+                inches(0.7),
+                14,
+                self._slide_fg,
+                font=self._font_body,
+            )
+
+    def _color_card(
+        self,
+        slide: Any,
+        line: str,
+        *,
+        left: float,
+        y: float,
+        width: float,
+        height: float,
+        field: str,
+        index: int,
+    ) -> None:
+        """A saturated color-block card: field fill, serif knockout numeral, body, arrow."""
+        inches = self._Inches
+        knock = design.knockout_text(field, self.colors)
+        card = self._rounded(slide, inches(left), inches(y), inches(width), inches(height), field)
+        self._soft_shadow(card)
+        self._text(
+            slide,
+            f"{index:02d}",
+            inches(left + 0.32),
+            inches(y + 0.2),
+            inches(width - 0.6),
+            inches(0.8),
+            34,
+            knock,
+            bold=True,
+            font=self._font_serif,
+        )
+        self._text(
+            slide,
+            "↗",
+            inches(left + width - 0.5),
+            inches(y + 0.18),
+            inches(0.4),
+            inches(0.32),
+            13,
+            knock,
+            bold=True,
+            align=self._PP_ALIGN.RIGHT,
+            font=self._font_body,
+        )
+        body = self._text(
+            slide,
+            self._short(line, 150),
+            inches(left + 0.34),
+            inches(y + 1.05),
+            inches(width - 0.66),
+            inches(max(0.5, height - 1.42)),
+            13,
+            knock,
+            font=self._font_body,
+        )
+        body.text_frame.auto_size = self._MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+
     def _new(self) -> Any:
         """Append a blank slide."""
         return self.prs.slides.add_slide(self._blank)
@@ -1140,6 +1412,228 @@ class _DeckRenderer:
             self._charts_used += 1
         return ok
 
+    # --- native diagrams (Schaubilder) ---------------------------------------------------
+    def _try_diagram(self, slide: Any, sc: SlideContent, *, top: float) -> bool:
+        """Render the slide's ``.diagram`` as native shapes (fail-open; respects the budget)."""
+        if sc.diagram is None or not self.style.charts_enabled:
+            return False
+        if self._diagrams_used >= self._max_diagrams:
+            return False
+        try:
+            ok = self._render_diagram(slide, sc.diagram, top=top)
+        except Exception:  # noqa: BLE001 — a diagram quirk never loses the slide (REQ-5)
+            ok = False
+        if ok:
+            self._diagrams_used += 1
+        return ok
+
+    def _render_diagram(self, slide: Any, spec: DiagramSpec, *, top: float) -> bool:
+        """Dispatch a :class:`DiagramSpec` to its native shape renderer."""
+        kind = spec.diagram_type
+        if kind == DiagramType.PROCESS:
+            return self._diagram_process(slide, spec, top=top)
+        if kind == DiagramType.MATRIX_2X2:
+            return self._diagram_matrix(slide, spec, top=top)
+        if kind in (DiagramType.PYRAMID, DiagramType.FUNNEL):
+            return self._diagram_stack(slide, spec, top=top, funnel=kind == DiagramType.FUNNEL)
+        if kind == DiagramType.KPI_STRIP:
+            return self._diagram_kpi(slide, spec, top=top)
+        if kind == DiagramType.COMPARE_COLUMNS:
+            return self._diagram_columns(slide, spec, top=top)
+        return False
+
+    def _diagram_process(self, slide: Any, spec: DiagramSpec, *, top: float) -> bool:
+        """Ordered process flow: saturated cards left→right joined by arrows."""
+        inches = self._Inches
+        fields = design.statement_fields(self.colors)
+        n = len(spec.nodes)
+        gap = 0.3
+        card_w = (11.75 - gap * (n - 1)) / n
+        height = 2.0
+        for i, node in enumerate(spec.nodes):
+            left = 0.72 + i * (card_w + gap)
+            self._color_card(
+                slide,
+                node.label,
+                left=left,
+                y=top,
+                width=card_w,
+                height=height,
+                field=fields[i % len(fields)],
+                index=i + 1,
+            )
+            if i < n - 1:
+                self._text(
+                    slide,
+                    "→",
+                    inches(left + card_w - 0.05),
+                    inches(top + height / 2 - 0.2),
+                    inches(gap + 0.1),
+                    inches(0.4),
+                    20,
+                    self._slide_fg,
+                    bold=True,
+                    align=self._PP_ALIGN.CENTER,
+                )
+        return True
+
+    def _diagram_matrix(self, slide: Any, spec: DiagramSpec, *, top: float) -> bool:
+        """2x2 matrix: four saturated quadrants with knockout label + detail."""
+        inches = self._Inches
+        fields = design.statement_fields(self.colors)
+        positions = [(0.72, top), (6.78, top), (0.72, top + 2.45), (6.78, top + 2.45)]
+        for i, (node, (left, y)) in enumerate(zip(spec.nodes, positions, strict=False)):
+            field = fields[i % len(fields)]
+            knock = design.knockout_text(field, self.colors)
+            card = self._rounded(slide, inches(left), inches(y), inches(5.68), inches(2.3), field)
+            self._soft_shadow(card)
+            self._text(
+                slide,
+                node.label,
+                inches(left + 0.25),
+                inches(y + 0.16),
+                inches(5.2),
+                inches(0.5),
+                16,
+                knock,
+                bold=True,
+            )
+            if node.detail:
+                self._text(
+                    slide,
+                    self._short(node.detail, 120),
+                    inches(left + 0.25),
+                    inches(y + 0.72),
+                    inches(5.2),
+                    inches(1.45),
+                    12,
+                    knock,
+                    font=self._font_body,
+                )
+        return True
+
+    def _diagram_stack(self, slide: Any, spec: DiagramSpec, *, top: float, funnel: bool) -> bool:
+        """Pyramid (broad base) or funnel (narrowing) of centered saturated tiers."""
+        inches = self._Inches
+        fields = design.statement_fields(self.colors)
+        n = len(spec.nodes)
+        height = min(0.95, 4.6 / n)
+        gap = 0.14
+        for i, node in enumerate(spec.nodes):
+            t = i / (n - 1) if n > 1 else 0.0
+            wfrac = (1.0 - 0.6 * t) if funnel else (0.45 + 0.55 * t)
+            width = 11.75 * wfrac
+            left = 0.72 + (11.75 - width) / 2
+            y = top + i * (height + gap)
+            field = fields[i % len(fields)]
+            knock = design.knockout_text(field, self.colors)
+            bar = self._rounded(
+                slide, inches(left), inches(y), inches(width), inches(height), field
+            )
+            self._soft_shadow(bar)
+            label = node.label + (f"  ·  {node.value}" if node.value else "")
+            self._text(
+                slide,
+                self._short(label, 70),
+                inches(left + 0.2),
+                inches(y),
+                inches(width - 0.4),
+                inches(height),
+                13,
+                knock,
+                bold=True,
+                anchor=self._MSO_ANCHOR.MIDDLE,
+                align=self._PP_ALIGN.CENTER,
+            )
+        return True
+
+    def _diagram_kpi(self, slide: Any, spec: DiagramSpec, *, top: float) -> bool:
+        """KPI strip: 2–5 saturated tiles each with a big value over a label."""
+        inches = self._Inches
+        fields = design.statement_fields(self.colors)
+        n = len(spec.nodes)
+        gap = 0.3
+        width = (11.75 - gap * (n - 1)) / n
+        height = 2.2
+        for i, node in enumerate(spec.nodes):
+            left = 0.72 + i * (width + gap)
+            field = fields[i % len(fields)]
+            knock = design.knockout_text(field, self.colors)
+            tile = self._rounded(
+                slide, inches(left), inches(top), inches(width), inches(height), field
+            )
+            self._soft_shadow(tile)
+            self._text(
+                slide,
+                self._short(node.value, 10),
+                inches(left + 0.15),
+                inches(top + 0.28),
+                inches(width - 0.3),
+                inches(1.0),
+                40,
+                knock,
+                bold=True,
+                align=self._PP_ALIGN.CENTER,
+                anchor=self._MSO_ANCHOR.MIDDLE,
+            )
+            self._text(
+                slide,
+                self._short(node.label, 24),
+                inches(left + 0.15),
+                inches(top + 1.4),
+                inches(width - 0.3),
+                inches(0.7),
+                12,
+                knock,
+                font=self._font_body,
+                align=self._PP_ALIGN.CENTER,
+            )
+        return True
+
+    def _diagram_columns(self, slide: Any, spec: DiagramSpec, *, top: float) -> bool:
+        """Comparison columns: 2–3 saturated panels with a serif title + attribute rows."""
+        inches = self._Inches
+        fields = design.statement_fields(self.colors)
+        m = len(spec.columns)
+        gap = 0.3
+        width = (11.75 - gap * (m - 1)) / m
+        height = min(4.6, 6.55 - top)
+        for i, column in enumerate(spec.columns):
+            left = 0.72 + i * (width + gap)
+            field = fields[i % len(fields)]
+            knock = design.knockout_text(field, self.colors)
+            panel = self._rounded(
+                slide, inches(left), inches(top), inches(width), inches(height), field
+            )
+            self._soft_shadow(panel)
+            self._text(
+                slide,
+                self._short(column.title, 18),
+                inches(left + 0.2),
+                inches(top + 0.18),
+                inches(width - 0.4),
+                inches(0.6),
+                18,
+                knock,
+                bold=True,
+                font=self._font_serif,
+            )
+            cy = top + 0.95
+            for cell in column.cells[:5]:
+                self._text(
+                    slide,
+                    self._short(cell, 42),
+                    inches(left + 0.2),
+                    inches(cy),
+                    inches(width - 0.4),
+                    inches(0.6),
+                    12,
+                    knock,
+                    font=self._font_body,
+                )
+                cy += 0.62
+        return True
+
     # --- per-slide-type renderers --------------------------------------------------------
     def _title_slide(self, sc: SlideContent) -> None:
         """Render the cover: a luminous dark editorial canvas + a two-tone grotesk headline."""
@@ -1148,7 +1642,11 @@ class _DeckRenderer:
         self._slide_no += 1
         self._slide_on_dark = True
         self._slide_fg = design.contrast_text(self.colors.canvas_dark, self.colors)
-        self._paint_dark_canvas(slide, glow=True)
+        cover = imagery.cover_image(self._imagery_dir, seed=sc.headline)
+        if cover is not None:
+            self._paint_cover_image(slide, cover)  # full-bleed Neura image under a dark scrim
+        else:
+            self._paint_dark_canvas(slide, glow=True)
         full = inches(_SLIDE_H_IN)
         self._rect(slide, inches(0), inches(0), inches(0.22), full, self.colors.accent_cyan)
         self._rect(slide, inches(0.22), inches(0), inches(0.08), full, self.colors.artifact_gold)
@@ -1201,18 +1699,20 @@ class _DeckRenderer:
         )
         self._add_logo(slide)
 
-    def _table_slide(self, sc: SlideContent) -> None:
+    def _table_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
         slide = self._new()
-        self._frame(slide, sc)
+        self._frame(slide, sc, canvas_hex=canvas)
         self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
         top = 1.75
         if sc.body:
-            self._body_callout(slide, sc.body, top=1.58, fill=self.colors.artifact_blue)
+            self._body_callout(slide, sc.body, top=1.58, fill=self.colors.deep_blue)
             top = 3.05
-        if self._try_chart(slide, sc, top=top):
-            return
         if sc.table:
             self._draw_table(slide, sc.table, top=top)
+        elif self._try_chart(slide, sc, top=top):
+            return
+        elif self._try_diagram(slide, sc, top=top):
+            return
         else:
             self._signal_cards(slide, sc.bullets, top=top)
 
@@ -1246,43 +1746,25 @@ class _DeckRenderer:
                     )
                     run.font.color.rgb = self.rgb(self.colors.text_dark)
 
-    def _swot_slide(self, sc: SlideContent) -> None:
-        """Render a 2x2 SWOT grid from ``table`` rows ([quadrant, content]) or bullets."""
-        inches, pt = self._Inches, self._Pt
+    def _matrix_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """Render a 2x2 matrix (SWOT / positioning) as four saturated knockout quadrants."""
         slide = self._new()
-        self._frame(slide, sc)
+        self._frame(slide, sc, canvas_hex=canvas)
         self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
         quadrants = self._swot_quadrants(sc)
-        positions = [(0.72, 1.75), (6.78, 1.75), (0.72, 4.25), (6.78, 4.25)]
-        for (label, content), (left, top), fill in zip(
-            quadrants, positions, _SWOT_FILLS, strict=False
-        ):
-            box = self._rounded(
-                slide,
-                inches(left),
-                inches(top),
-                inches(5.68),
-                inches(2.16),
-                getattr(self.colors, fill),
-            )
-            frame = box.text_frame
-            frame.word_wrap = True
-            frame.margin_left = inches(0.15)
-            frame.margin_top = inches(0.1)
-            head = frame.paragraphs[0]
-            head.text = label
-            head_run = head.runs[0]
-            head_run.font.bold = True
-            head_run.font.size = pt(15)
-            head_run.font.name = self._font_body
-            head_run.font.color.rgb = self.rgb(self.colors.text_dark)
-            for line in content[:3]:
-                para = frame.add_paragraph()
-                para.text = f"- {self._short(line, 80)}"
-                run = para.runs[0]
-                run.font.size = pt(12)
-                run.font.name = self._font_body
-                run.font.color.rgb = self.rgb(self.colors.text_dark)
+        nodes = [
+            DiagramNode(label=label, detail="; ".join(lines[:3])) for label, lines in quadrants
+        ]
+        try:
+            spec = DiagramSpec(diagram_type=DiagramType.MATRIX_2X2, nodes=nodes)
+        except ValueError:
+            self._signal_cards(slide, [lbl for lbl, _ in quadrants], top=1.95)
+            return
+        self._diagram_matrix(slide, spec, top=1.95)
+
+    def _swot_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """Back-compatible SWOT entry — delegates to the generalized 2x2 matrix renderer."""
+        self._matrix_slide(sc, canvas)
 
     def _swot_quadrants(self, sc: SlideContent) -> list[tuple[str, list[str]]]:
         """Resolve 4 (label, lines) quadrants from the slide's table or bullets (fail-safe)."""
@@ -1299,37 +1781,239 @@ class _DeckRenderer:
         bullets = sc.bullets or []
         return [(default_labels[i], [bullets[i]] if i < len(bullets) else []) for i in range(4)]
 
-    def _executive_slide(self, sc: SlideContent) -> None:
-        """Render the executive summary as a bottom-line callout plus proof cards (or a chart)."""
+    def _statement_slide(self, sc: SlideContent, canvas: str) -> None:
+        """Full-bleed manifesto: a saturated field, an oversized two-tone serif-accent headline."""
+        inches = self._Inches
         slide = self._new()
-        self._frame(slide, sc)
-        self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
-        lead = sc.body or (sc.bullets[0] if sc.bullets else "-")
-        self._body_callout(slide, lead, top=1.62, fill=self.colors.artifact_blue)
-        if self._try_chart(slide, sc, top=3.15):
-            return
-        supporting = sc.bullets if sc.body else sc.bullets[1:]
-        self._signal_cards(slide, supporting or sc.bullets[:1], top=3.15, max_cards=4)
+        self._slide_no += 1
+        self._paint_field(slide, canvas)
+        fg = self._slide_fg
+        spot = design.spot_for_canvas(canvas, self.colors)
+        self._text(
+            slide,
+            deck_frame_label(self.language, sc.slide_type).upper(),
+            inches(0.82),
+            inches(0.7),
+            inches(10.0),
+            inches(0.3),
+            11,
+            fg,
+            bold=True,
+            font=self._font_mono,
+        )
+        self._display_headline(
+            slide,
+            sc.headline,
+            left=0.8,
+            top=1.9,
+            width=11.7,
+            height=3.4,
+            size=56,
+            base_color=fg,
+            accent_color=spot,
+            serif_token=True,
+        )
+        if sc.body:
+            self._text(
+                slide,
+                self._short(sc.body, 120),
+                inches(0.82),
+                inches(5.7),
+                inches(10.2),
+                inches(1.0),
+                18,
+                fg,
+                font=self._font_body,
+            )
+        self._text(
+            slide,
+            f"{self._slide_no:02d}",
+            inches(10.9),
+            inches(5.5),
+            inches(2.1),
+            inches(1.6),
+            80,
+            spot,
+            bold=True,
+            align=self._PP_ALIGN.RIGHT,
+        )
+        self._add_logo(slide)
 
-    def _recommendation_slide(self, sc: SlideContent) -> None:
-        """Render a decision-ready recommendation with support (dark editorial divider)."""
+    def _quote_slide(self, sc: SlideContent, canvas: str) -> None:
+        """Oversized serif pull-statement on a dark/saturated canvas with a quote glyph."""
+        inches = self._Inches
         slide = self._new()
-        self._frame(slide, sc)
-        self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
-        decision = sc.body or (sc.bullets[0] if sc.bullets else "-")
-        self._body_callout(slide, decision, top=1.62, fill=self.colors.artifact_teal)
-        if self._try_chart(slide, sc, top=3.12):
-            return
-        supporting = sc.bullets if sc.body else sc.bullets[1:]
-        if sc.table:
-            self._draw_table(slide, sc.table, top=3.12)
+        self._slide_no += 1
+        if canvas == self.colors.canvas_dark:
+            self._slide_on_dark = True
+            self._slide_fg = design.contrast_text(canvas, self.colors)
+            self._paint_dark_canvas(slide, glow=True)
         else:
-            self._signal_cards(slide, supporting or [decision], top=3.12, max_cards=4)
+            self._paint_field(slide, canvas)
+        fg = self._slide_fg
+        spot = design.spot_for_canvas(canvas, self.colors)
+        self._text(
+            slide,
+            "“",
+            inches(0.55),
+            inches(0.35),
+            inches(3.0),
+            inches(2.4),
+            130,
+            spot,
+            bold=True,
+            font=self._font_serif,
+        )
+        quote = sc.body or sc.headline
+        self._text(
+            slide,
+            self._short(quote, 170),
+            inches(1.2),
+            inches(2.1),
+            inches(11.0),
+            inches(3.2),
+            40,
+            fg,
+            font=self._font_serif,
+        )
+        if sc.body and sc.headline:
+            self._text(
+                slide,
+                self._short(sc.headline, 40),
+                inches(1.2),
+                inches(5.7),
+                inches(10.0),
+                inches(0.5),
+                13,
+                fg,
+                font=self._font_mono,
+            )
+        self._add_logo(slide)
 
-    def _appendix_slide(self, sc: SlideContent) -> None:
+    def _metric_hero_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """One–three giant grounded numerals with a supporting clause beneath each."""
+        slide = self._new()
+        self._frame(slide, sc, canvas_hex=canvas)
+        self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
+        metrics: list[tuple[str, str]] = []
+        for bullet in sc.bullets:
+            token = self._metric_token(bullet)
+            if token:
+                metrics.append((token, bullet))
+        metrics = metrics[:3]
+        if not metrics:
+            self._signal_cards(slide, sc.bullets, top=1.95)
+            return
+        gap = 0.4
+        width = (11.75 - gap * (len(metrics) - 1)) / len(metrics)
+        spot = self._spot_color()
+        for i, (token, line) in enumerate(metrics):
+            left = 0.72 + i * (width + gap)
+            self._big_number(slide, token, line, left=left, top=2.2, width=width, color=spot)
+
+    def _colorblock_grid_slide(
+        self, sc: SlideContent, canvas: str | None = None, accent_index: int = 0
+    ) -> None:
+        """Saturated numbered color-block cards (the KINETIC / 'Selected Work' look)."""
+        slide = self._new()
+        self._frame(slide, sc, canvas_hex=canvas)
+        self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
+        lines = [self._short(b, 150) for b in (sc.bullets or []) if str(b).strip()][:4]
+        if not lines:
+            self._signal_cards(slide, sc.bullets, top=1.95)
+            return
+        top = 1.95
+        if sc.body:
+            self._body_callout(slide, sc.body, top=1.62, fill=self.colors.deep_blue)
+            top = 3.05
+        fields = design.statement_fields(self.colors)
+        count = len(lines)
+        cols = 1 if count == 1 else 2
+        rows = (count + cols - 1) // cols
+        gap = 0.3
+        card_w = 11.75 if cols == 1 else 5.73
+        available = max(1.1, 6.55 - top)
+        card_h = min(2.3, (available - gap * (rows - 1)) / rows)
+        for idx, line in enumerate(lines):
+            row, col = divmod(idx, cols)
+            left = 0.72 + col * (card_w + gap)
+            y = top + row * (card_h + gap)
+            field = fields[(accent_index + idx) % len(fields)]
+            self._color_card(
+                slide, line, left=left, y=y, width=card_w, height=card_h, field=field, index=idx + 1
+            )
+
+    def _editorial_split_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """Asymmetric editorial split: a big serif headline left, supporting body/bullets right."""
+        inches = self._Inches
+        slide = self._new()
+        self._frame(slide, sc, canvas_hex=canvas)
+        spot = self._spot_color()
+        self._display_headline(
+            slide,
+            sc.headline,
+            left=0.7,
+            top=1.9,
+            width=6.6,
+            height=3.9,
+            size=44,
+            base_color=self._slide_fg,
+            accent_color=spot,
+            serif_token=True,
+        )
+        self._rect(
+            slide, inches(7.55), inches(1.95), inches(0.012), inches(3.7), self.colors.charcoal
+        )
+        rx, ry = 7.95, 1.98
+        if sc.body:
+            self._text(
+                slide,
+                self._short(sc.body, 220),
+                inches(rx),
+                inches(ry),
+                inches(4.65),
+                inches(1.7),
+                14,
+                self._slide_fg,
+                font=self._font_body,
+            )
+            ry += 1.75
+        for bullet in (sc.bullets or [])[:4]:
+            self._text(
+                slide,
+                "— " + self._short(bullet, 90),
+                inches(rx),
+                inches(ry),
+                inches(4.65),
+                inches(0.7),
+                13,
+                self._slide_fg,
+                font=self._font_body,
+            )
+            ry += 0.72
+
+    def _chart_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """A data slide: native chart (or native diagram), falling back to table/cards."""
+        slide = self._new()
+        self._frame(slide, sc, canvas_hex=canvas)
+        self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
+        top = 1.85
+        if sc.body:
+            self._body_callout(slide, sc.body, top=1.62, fill=self._accent(sc.slide_type))
+            top = 3.05
+        if self._try_chart(slide, sc, top=top):
+            return
+        if self._try_diagram(slide, sc, top=top):
+            return
+        if sc.table:
+            self._draw_table(slide, sc.table, top=top)
+        else:
+            self._signal_cards(slide, sc.bullets, top=top)
+
+    def _appendix_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
         """Render sources/appendix material as a compact two-column reference page."""
         slide = self._new()
-        self._frame(slide, sc)
+        self._frame(slide, sc, canvas_hex=canvas)
         self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
         if sc.body:
             self._body_callout(slide, sc.body, top=1.55, fill=self.colors.charcoal)
@@ -1341,10 +2025,10 @@ class _DeckRenderer:
             items = [" - ".join(str(cell) for cell in row if str(cell).strip()) for row in sc.table]
         self._compact_list(slide, items, top=top)
 
-    def _content_slide(self, sc: SlideContent) -> None:
-        """Render a non-special content slide through the frame (chart, table, or cards)."""
+    def _content_slide(self, sc: SlideContent, canvas: str | None = None) -> None:
+        """Render a content slide through the frame (chart, diagram, table, or cards)."""
         slide = self._new()
-        self._frame(slide, sc)
+        self._frame(slide, sc, canvas_hex=canvas)
         self._headline(slide, sc.headline, accent=self._accent(sc.slide_type))
         top = 1.75
         if sc.body:
@@ -1352,27 +2036,57 @@ class _DeckRenderer:
             top = 3.05
         if self._try_chart(slide, sc, top=top):
             return
+        if self._try_diagram(slide, sc, top=top):
+            return
         if sc.table:
             self._draw_table(slide, sc.table, top=top)
         else:
             self._signal_cards(slide, sc.bullets, top=top)
 
-    def render(self, sc: SlideContent) -> None:
-        """Dispatch a single slide to its renderer by :class:`~models.deck.SlideType`."""
+    def render(self, sc: SlideContent, plan: SlidePlan | None = None) -> None:
+        """Render a slide via its design-director :class:`SlidePlan` (archetype + canvas).
+
+        The cover is always the dedicated dark title slide. Every other archetype is wrapped
+        fail-open: any rendering quirk degrades to ``_content_slide`` so the deck never loses a
+        slide (REQ-5). When ``plan`` is omitted (legacy callers), a calm CONTENT slide on the
+        default canvas is rendered — preserving the pre-director behavior.
+        """
         if sc.slide_type == SlideType.TITLE:
             self._title_slide(sc)
-        elif sc.slide_type == SlideType.EXECUTIVE_SUMMARY:
-            self._executive_slide(sc)
-        elif sc.slide_type == SlideType.COMPETITIVE_COMPARISON:
-            self._table_slide(sc)
-        elif sc.slide_type == SlideType.SWOT:
-            self._swot_slide(sc)
-        elif sc.slide_type == SlideType.RECOMMENDATION:
-            self._recommendation_slide(sc)
-        elif sc.slide_type == SlideType.APPENDIX:
-            self._appendix_slide(sc)
-        else:
+            return
+        if plan is None:
             self._content_slide(sc)
+            return
+        canvas = deck_director.canvas_hex(plan.canvas, self.colors, plan.accent_index)
+        try:
+            self._render_archetype(plan.archetype, sc, canvas, plan.accent_index)
+        except Exception:  # noqa: BLE001 — any archetype quirk degrades to content (REQ-5)
+            self._content_slide(sc, canvas)
+
+    def _render_archetype(
+        self, archetype: Archetype, sc: SlideContent, canvas: str, accent_index: int
+    ) -> None:
+        """Dispatch one slide to its archetype renderer (see :class:`~models.deck.Archetype`)."""
+        if archetype == Archetype.STATEMENT:
+            self._statement_slide(sc, canvas)
+        elif archetype == Archetype.QUOTE:
+            self._quote_slide(sc, canvas)
+        elif archetype == Archetype.METRIC_HERO:
+            self._metric_hero_slide(sc, canvas)
+        elif archetype == Archetype.COLORBLOCK_GRID:
+            self._colorblock_grid_slide(sc, canvas, accent_index)
+        elif archetype == Archetype.EDITORIAL_SPLIT:
+            self._editorial_split_slide(sc, canvas)
+        elif archetype == Archetype.TABLE:
+            self._table_slide(sc, canvas)
+        elif archetype == Archetype.MATRIX:
+            self._matrix_slide(sc, canvas)
+        elif archetype == Archetype.CHART:
+            self._chart_slide(sc, canvas)
+        elif archetype == Archetype.APPENDIX:
+            self._appendix_slide(sc, canvas)
+        else:
+            self._content_slide(sc, canvas)
 
     def save(self, output_dir: str | Path, title: str) -> Path:
         """Write the deck to ``output_dir`` and return its path."""
@@ -1400,8 +2114,9 @@ def build_deck(
     """
     deck = prepare_deck_for_render(deck, analysis)
     renderer = _DeckRenderer(config, deck.language, research_report)
-    for slide in deck.slides:
-        renderer.render(slide)
+    plans = deck_director.plan_deck(deck.slides, editorial=design.is_editorial(config.output.style))
+    for slide, plan in zip(deck.slides, plans, strict=True):
+        renderer.render(slide, plan)
     return renderer.save(output_dir, deck.title)
 
 
