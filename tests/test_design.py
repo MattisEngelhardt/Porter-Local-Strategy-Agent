@@ -13,16 +13,23 @@ from core.design import (
     SERIF_FALLBACK,
     chart_series_colors,
     contrast_text,
+    darken,
     deck_fonts,
     depth_gradient_stops,
     design_marker,
     hex_to_rgb,
     is_editorial,
+    knockout_text,
+    lighten,
     linear_gradient_svg,
     luminance,
     mono_stack,
     serif_stack,
     split_for_highlight,
+    spot_for_canvas,
+    statement_fields,
+    strip_inline_markdown,
+    strip_label_prefix,
     svg_escape,
     telemetry_chips,
 )
@@ -75,9 +82,51 @@ def test_font_stacks_include_primary_and_fallback() -> None:
     assert fonts["display"] == style.grotesk_font
 
 
-def test_deck_fonts_fall_back_when_blank() -> None:
+def test_deck_fonts_resolve_from_theme_and_override() -> None:
+    # A blank field now resolves to the active theme's family (editorial default), NOT a bare
+    # system fallback — the theme always supplies a real family name (PowerPoint substitutes).
     fonts = deck_fonts(StyleConfig(grotesk_font=""))
-    assert fonts["display"] == GROTESK_FALLBACK
+    assert fonts["display"] == "Space Grotesk"
+    assert fonts["display"] != GROTESK_FALLBACK
+    # The deck now exposes serif + an expressive statement face (was PDF-only before).
+    assert fonts["serif"] == "Fraunces"
+    assert fonts["statement"] == "Archivo Black"
+    # An explicit *_font override still wins over the theme (back-compat).
+    assert deck_fonts(StyleConfig(grotesk_font="My Grotesk"))["display"] == "My Grotesk"
+    # A non-editorial theme swaps the families.
+    luxury = deck_fonts(StyleConfig(type_theme="luxury"))
+    assert luxury["display"] == "Sora"
+    assert luxury["serif"] == "Bodoni Moda"
+    # An unknown theme degrades to the editorial default.
+    assert deck_fonts(StyleConfig(type_theme="nope"))["serif"] == "Fraunces"
+
+
+def test_statement_fields_mix_warm_and_vivid() -> None:
+    colors = ColorsConfig()
+    fields = statement_fields(colors)
+    assert len(fields) >= 6
+    assert colors.vivid_red in fields and colors.baby_blue in fields  # vivid present
+    assert colors.terracotta in fields and colors.plum in fields  # warm present
+    assert all(f.startswith("#") and len(f) == 7 for f in fields)  # all valid hex
+
+
+def test_knockout_and_spot_colors_are_legible() -> None:
+    colors = ColorsConfig()
+    # cream knockout on a dark/strong field, ink on a light field
+    assert knockout_text(colors.vivid_red, colors) == colors.knockout_cream
+    assert knockout_text(colors.vivid_yellow, colors) == colors.ink
+    # two-tone spot: gold on dark, coral on cream, vivid-yellow pop on a mid field
+    assert spot_for_canvas(colors.canvas_dark, colors) == colors.artifact_gold
+    assert spot_for_canvas(colors.paper, colors) == colors.coral
+    assert spot_for_canvas(colors.vivid_red, colors) == colors.vivid_yellow
+
+
+def test_darken_and_lighten_move_luminance_and_clamp() -> None:
+    base = "#808080"
+    assert luminance(darken(base, 40)) < luminance(base)
+    assert luminance(lighten(base, 40)) > luminance(base)
+    assert darken("#000000", 50) == "#000000"  # clamps at black
+    assert lighten("#FFFFFF", 50) == "#FFFFFF"  # clamps at white
 
 
 # --- two-tone headline -------------------------------------------------------------------
@@ -98,6 +147,31 @@ def test_split_returns_plain_when_nothing_to_highlight() -> None:
     before, token, after = split_for_highlight("keep moving forward")
     assert token == ""
     assert before == "keep moving forward"
+
+
+def test_split_keeps_unit_word_intact() -> None:
+    # The v3 bug sliced "12 months" into "12 m" + "onths"; the token must stay whole now.
+    before, token, after = split_for_highlight("Pursue partnerships within the next 12 months")
+    assert token == "12 months"
+    assert "onths" not in (before + after)
+
+
+# --- content hygiene (Block 5.0) ---------------------------------------------------------
+def test_strip_inline_markdown_removes_emphasis() -> None:
+    assert strip_inline_markdown("**Go:** move fast") == "Go: move fast"
+    assert strip_inline_markdown("a `code` and __b__") == "a code and b"
+    assert strip_inline_markdown("## Heading") == "Heading"
+    assert strip_inline_markdown("- bullet point") == "bullet point"
+
+
+def test_strip_label_prefix_drops_only_the_redundant_label() -> None:
+    assert (
+        strip_label_prefix("Recommendation: pursue two partnerships") == "pursue two partnerships"
+    )
+    assert strip_label_prefix("Focus Area 1: formalize R&D") == "formalize R&D"
+    # The decision token and ordinary text are untouched (no over-stripping).
+    assert strip_label_prefix("GO — accelerate now") == "GO — accelerate now"
+    assert strip_label_prefix("Revenue grew 40%") == "Revenue grew 40%"
 
 
 # --- telemetry chips (source-grounded) ---------------------------------------------------
