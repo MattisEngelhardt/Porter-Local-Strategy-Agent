@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
+from core.design import strip_inline_markdown, strip_label_prefix
 from models.deck import DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput, Section, SourceRef
 from models.task import Audience, Language, TaskType
@@ -98,8 +99,8 @@ def _t(language: Language, de: str, en: str) -> str:
 
 
 def _clean(text: str) -> str:
-    """Collapse whitespace and trim common bullet markers."""
-    return " ".join(text.strip(" -*\t\r\n").split())
+    """Collapse whitespace, strip leaked inline Markdown, and trim common bullet markers."""
+    return " ".join(strip_inline_markdown(text).strip(" -*\t\r\n").split())
 
 
 def _trim_words(text: str, max_words: int) -> str:
@@ -181,9 +182,7 @@ def brief_frame_context(
             (_sentences(analysis.bottom_line) or [_gap_text(analysis.language)])[0], 22
         ),
         "evidence_label": "Beleganker" if is_de else "Evidence anchors",
-        "evidence_anchors": [
-            {"text": anchor.text, "source": anchor.source} for anchor in anchors
-        ],
+        "evidence_anchors": [{"text": anchor.text, "source": anchor.source} for anchor in anchors],
         "proof_stat_label": _t(analysis.language, "Belege", "Proof"),
         "proof_stat": str(len(anchors)),
         "source_stat_label": _t(analysis.language, "Quellen", "Sources"),
@@ -247,8 +246,7 @@ def _bottom_line_bullets(analysis: AnalysisOutput | None, language: Language) ->
     if analysis is None or not analysis.bottom_line.strip():
         return [_gap_text(language)]
     bullets = [
-        _trim_words(sentence, _MAX_BULLET_WORDS)
-        for sentence in _sentences(analysis.bottom_line)
+        _trim_words(sentence, _MAX_BULLET_WORDS) for sentence in _sentences(analysis.bottom_line)
     ]
     return bullets[:3] or [_gap_text(language)]
 
@@ -279,7 +277,11 @@ def _claim_headline(
 
 def _normalize_bullets(slide: SlideContent, language: Language) -> list[str]:
     """Keep slide support tight while preserving the original facts."""
-    bullets = [_trim_words(bullet, _MAX_BULLET_WORDS) for bullet in slide.bullets if _clean(bullet)]
+    bullets = [
+        _trim_words(strip_label_prefix(bullet), _MAX_BULLET_WORDS)
+        for bullet in slide.bullets
+        if _clean(bullet)
+    ]
     if slide.slide_type == SlideType.TITLE:
         return bullets[:_MAX_BULLETS]
     if not bullets and not slide.table and not (slide.body and _clean(slide.body)):
@@ -294,10 +296,10 @@ def _normalize_slide(
     content_index: int,
 ) -> SlideContent:
     """Apply the deterministic deck guardrails to one slide."""
-    body = _trim_words(slide.body, _MAX_BODY_WORDS) if slide.body else None
+    body = _trim_words(strip_label_prefix(slide.body), _MAX_BODY_WORDS) if slide.body else None
     return slide.model_copy(
         update={
-            "headline": _claim_headline(slide, analysis, content_index),
+            "headline": strip_label_prefix(_claim_headline(slide, analysis, content_index)),
             "bullets": _normalize_bullets(slide, language),
             "body": body,
         }
@@ -346,20 +348,40 @@ def _has_recommendation(slides: list[SlideContent]) -> bool:
     return any(slide.slide_type == SlideType.RECOMMENDATION for slide in slides)
 
 
-def _sources_slide(analysis: AnalysisOutput, language: Language) -> SlideContent:
-    """Build an appendix slide from the existing source list only."""
-    if analysis.sources:
-        bullets = [
-            _trim_words(source.url + (f" - {source.title}" if source.title else ""), 18)
-            for source in analysis.sources[:8]
+_SOURCES_PER_APPENDIX = 18  # two columns x nine rows fit the appendix content area
+
+
+def _sources_slides(analysis: AnalysisOutput, language: Language) -> list[SlideContent]:
+    """Build the bibliography from the FULL cited-source list, paginated across appendix slides.
+
+    Uses every source the synthesizer compiled (``analysis.sources`` == ``compile_cited_sources``),
+    never just the two an LLM happened to echo into its own appendix (the v3 '2 sources' bug). Adds
+    no provenance — it only lists what was already cited.
+    """
+    head = "Quellen" if language == Language.DE else "Sources"
+    if not analysis.sources:
+        return [
+            SlideContent(
+                slide_type=SlideType.APPENDIX, headline=head, bullets=[_gap_text(language)]
+            )
         ]
-    else:
-        bullets = [_gap_text(language)]
-    return SlideContent(
-        slide_type=SlideType.APPENDIX,
-        headline="Quellen" if language == Language.DE else "Sources",
-        bullets=bullets,
-    )
+    bullets = [
+        _trim_words(source.url + (f" - {source.title}" if source.title else ""), 18)
+        for source in analysis.sources
+    ]
+    pages = [
+        bullets[i : i + _SOURCES_PER_APPENDIX]
+        for i in range(0, len(bullets), _SOURCES_PER_APPENDIX)
+    ]
+    total = len(pages)
+    return [
+        SlideContent(
+            slide_type=SlideType.APPENDIX,
+            headline=head if total == 1 else f"{head} ({idx + 1}/{total})",
+            bullets=page,
+        )
+        for idx, page in enumerate(pages)
+    ]
 
 
 def _evidence_slide(analysis: AnalysisOutput, language: Language) -> SlideContent:
@@ -466,8 +488,11 @@ def prepare_deck_for_render(
     if analysis is not None and not _has_recommendation(normalized):
         _insert_before_appendix(normalized, _recommendation_from_bottom_line(analysis, language))
 
-    if analysis is not None and not _has_sources_appendix(normalized):
-        normalized.append(_sources_slide(analysis, language))
+    if analysis is not None:
+        # Always (re)build the bibliography from the FULL cited-source list, paginated — never the
+        # two sources the LLM happened to echo into its own appendix (the v3 '2 sources' bug).
+        normalized = [s for s in normalized if s.slide_type != SlideType.APPENDIX]
+        normalized.extend(_sources_slides(analysis, language))
 
     return deck.model_copy(update={"slides": normalized})
 
