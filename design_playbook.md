@@ -124,3 +124,52 @@ Mono outline pills built **only** from a real `ResearchReport`: `SOURCES n`, `WO
 - **REQ-1/2** — local, free, OFL fonts; missing fonts degrade to system fonts, never break.
 - **REQ-5** — renderers fail open (a chart/depth quirk never loses the analysis); hard deps fail fast.
 - **RULE 4** — every color/font/budget comes from `config.yaml`, nothing hardcoded.
+
+---
+
+## Editorial v4.0 — "Artwork" upgrade (Block 5)
+
+A deck-design upgrade so slides read as composed artwork (Forma / KINETIC / "Selected Work" / the
+Aivazovsky warmth), not one repeated card layout. All additive and config-driven; `restrained` stays
+flat/board-safe. For review (RULE 14).
+
+**Palette — warm STAYS, vivid + black/white ADDED.** The warm v3.0 tokens are unchanged. New warm
+extensions: `terracotta #D2693C`, `ochre #E0A126`, `plum #5B3A57`, `deep_blue #1B3A6B`, `sand #EDE3D2`,
+`cream_hi #FAF6EE`, `knockout_cream #F7F1E6`. New vivid statement colors: `baby_blue #7CC6FE`,
+`vivid_red #E5383B`, `vivid_green #2DBE6C`, `vivid_orange #F4791F`, `vivid_yellow #FFC93C`,
+`violet #7B3FE4`. `core.design.statement_fields` mixes warm + vivid; the **design-director** deploys
+them on a rhythmic **color score** (cream / sand / saturated field / dark) so it is vivid yet
+composed — never a random color box (`core/deck_director.py`).
+
+**Typography — a ≥20-family OFL pool + type-themes.** `core/typography.py` defines 25+ free families by
+role (serif-display / grotesk / expressive-display / mono) and curated **themes** (`editorial`,
+`kinetic`, `luxury`, `modern`, `brutalist`) selected by `output.style.type_theme`. The deck now uses
+**serif** (Fraunces et al.) — visible on statement / split / quote slides and card numerals — alongside
+grotesk + mono (multi-font, multiple colors). Never 20 fonts on a slide: each deck uses one coherent
+3–4-family theme. Install via `scripts/install_fonts.py`; missing fonts degrade to system fonts.
+
+**Layout archetypes (the variety engine).** `core/deck_director.plan_deck` maps each slide →
+`(archetype, canvas)` deterministically (honoring an optional LLM `archetype`/`emphasis` hint when
+present; AUTO otherwise). Archetypes in `core/exporter.py`: STATEMENT (full-bleed field manifesto),
+METRIC_HERO (giant numerals), COLORBLOCK_GRID (saturated numbered cards), EDITORIAL_SPLIT (asymmetric
+serif + negative space), QUOTE (oversized serif pull-statement), TABLE, MATRIX (2×2), CHART, APPENDIX,
+CONTENT (universal fail-open fallback). A diversity guard breaks monotonous runs; STATEMENT is capped
+to stay special. Depth: sparing soft shadows + field duotone (editorial only, fail-open).
+
+**Diagrams / Schaubilder.** `core/diagrams.py` + `models/diagram.py` add native, editable schematics —
+process flow, 2×2 matrix, pyramid, funnel, KPI strip, comparison columns — built only from a slide's
+bullets/table and gated by `validate_diagram` (every number traceable to evidence; budget
+`max_diagrams_per_deck=3`; charts win over diagrams). Attached in `core/visual_selector.attach_deck_diagrams`.
+
+**Cover imagery.** The cover may use a full-bleed Neura brand image (`output.imagery_dir`, e.g. robots)
+under a dark scrim with a light logo (`output.logo_path_light`); empty/missing → the gradient cover
+(see `assets/imagery/README.md`). Deterministic, fail-open, no generation.
+
+**Telemetry chips REMOVED from slides.** The `SOURCES/WORKERS/CONFIDENCE/AS-OF` chips no longer render
+on deck slides (`output.style.telemetry_chips=false` by default; opt-in still available). The
+**bibliography** appendix now lists **all** cited sources (paginated) — not the two an LLM echoed.
+
+**Correctness fixes (Block 5.0).** Two-tone token never splits a word ("12 months", not "12 m|onths");
+leaked Markdown (`**`) stripped; bare ordinals ("Focus Area 1") are not promoted to hero numbers;
+generic label prefixes ("Recommendation:/Decision:") stripped; cards auto-fit (no overflow/tag
+collision); the logo is width-capped and clear of the page number (light variant on dark).
