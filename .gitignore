@@ -18,7 +18,12 @@ PHASE_3.5_PLAN.md
 PHASE_4_KICKOFF.md
 PHASE_5_KICKOFF.md
 DESIGN_REVAMP_PROGRESS.md
+DESIGN_REVAMP_BLOCK5_PLAN.md
 demo_prompt.txt
+
+# Local debug screenshots dropped into asset folders — never publish
+assets/imagery/Screenshot*.png
+assets/imagery/Screenshot*.jpg
 
 # Generated outputs (keep the directory, ignore its contents by default).
 # Outputs may contain confidential context, so nothing is published unless
