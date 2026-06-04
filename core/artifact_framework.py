@@ -365,9 +365,12 @@ def _sources_slides(analysis: AnalysisOutput, language: Language) -> list[SlideC
                 slide_type=SlideType.APPENDIX, headline=head, bullets=[_gap_text(language)]
             )
         ]
+    # Continuous zero-padded numbering across all pages so the bibliography reads as one consistent,
+    # ordered reference list (e.g. "07  example.com — Title"), not a loose pile of URLs.
     bullets = [
-        _trim_words(source.url + (f" - {source.title}" if source.title else ""), 18)
-        for source in analysis.sources
+        f"{idx:02d}  "
+        + _trim_words(source.url + (f" — {source.title}" if source.title else ""), 16)
+        for idx, source in enumerate(analysis.sources, start=1)
     ]
     pages = [
         bullets[i : i + _SOURCES_PER_APPENDIX]

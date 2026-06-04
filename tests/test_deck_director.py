@@ -68,6 +68,16 @@ def test_diversity_guard_breaks_long_runs() -> None:
     assert len(set(arches)) >= 2  # variety injected, not one repeated layout
 
 
+def test_consecutive_appendix_pages_stay_uniform() -> None:
+    # A 4-page bibliography must render with one consistent layout — the diversity guard must NOT
+    # flip "Sources 3/4" to EDITORIAL_SPLIT (the v4 inconsistent-bibliography bug).
+    slides = [
+        _slide(SlideType.APPENDIX, f"Sources ({i + 1}/4)", bullets=["https://x"]) for i in range(4)
+    ]
+    arches = [p.archetype for p in plan_deck(slides)]
+    assert arches == [Archetype.APPENDIX] * 4
+
+
 def test_restrained_collapses_to_calm_set() -> None:
     plans = plan_deck(_varied_deck(), editorial=False)
     for p in plans:

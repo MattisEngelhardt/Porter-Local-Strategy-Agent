@@ -44,6 +44,16 @@ _EXPRESSIVE = {
     Archetype.EDITORIAL_SPLIT,
 }
 
+# Structural archetypes that legitimately repeat (a 4-page bibliography, back-to-back data tables):
+# they must NEVER be rewritten by the diversity guard, or one "Sources 3/4" page suddenly renders in
+# a different layout than its siblings (the v4 inconsistent-bibliography bug).
+_STRUCTURAL = {
+    Archetype.APPENDIX,
+    Archetype.TABLE,
+    Archetype.MATRIX,
+    Archetype.CHART,
+}
+
 
 class CanvasRole(StrEnum):
     """The canvas a slide sits on. ``FIELD`` resolves to a rotating saturated statement color."""
@@ -131,10 +141,17 @@ def _resolve_archetype(sc: SlideContent) -> Archetype:
 
 
 def _diversify(arches: list[Archetype]) -> list[Archetype]:
-    """Break long runs of the same archetype so the deck never feels monotonous (v3 complaint)."""
+    """Break long runs of the same archetype so the deck never feels monotonous (v3 complaint).
+
+    Structural archetypes (appendix/table/matrix/chart) are exempt: they legitimately repeat and
+    must stay uniform, so a multi-page bibliography keeps one layout across pages (v4 bug).
+    """
     out = list(arches)
     run = 1
     for i in range(1, len(out)):
+        if out[i] in _STRUCTURAL:
+            run = 1  # repeats are intentional here — never rewrite, and reset the run counter
+            continue
         if out[i] == out[i - 1]:
             run += 1
             if run >= 3:

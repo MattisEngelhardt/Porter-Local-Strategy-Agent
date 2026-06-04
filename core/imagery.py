@@ -13,14 +13,28 @@ from pathlib import Path
 
 _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 _COVER_HINTS = ("cover", "hero", "title")
+# Name fragments that mark a non-brand image (UI/design reference screenshots) — never a cover.
+# Design references live in ``assets/imagery/reference/`` (a subdir already skipped by iterdir);
+# this is a belt-and-suspenders guard so a stray "Screenshot ….png" is never chosen.
+_EXCLUDE_SUBSTRINGS = ("screenshot", "screen shot", "untitled")
 
 
 def list_images(imagery_dir: str | Path) -> list[Path]:
-    """All usable image files in ``imagery_dir`` (sorted, stable); empty list if absent."""
+    """Brand-approved cover images in ``imagery_dir`` (sorted, stable); empty list if absent.
+
+    Only top-level image files are eligible (so ``reference/`` design screenshots are excluded) and
+    screenshot-named files are filtered out — selection is *meaningful*, never a random UI grab.
+    """
     directory = Path(imagery_dir)
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.iterdir() if p.is_file() and p.suffix.lower() in _IMAGE_EXTS)
+    return sorted(
+        p
+        for p in directory.iterdir()
+        if p.is_file()
+        and p.suffix.lower() in _IMAGE_EXTS
+        and not any(token in p.stem.lower() for token in _EXCLUDE_SUBSTRINGS)
+    )
 
 
 def cover_image(imagery_dir: str | Path, *, seed: str = "") -> Path | None:

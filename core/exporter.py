@@ -30,7 +30,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
-from core import deck_director, design, imagery, visuals
+from core import charts_image, deck_director, design, font_embed, imagery, visuals
 from core.artifact_framework import (
     brief_frame_context,
     deck_frame_label,
@@ -909,9 +909,21 @@ class _DeckRenderer:
         return " ".join(match.group(0).split())[:14]
 
     def _short(self, text: str, limit: int = 165) -> str:
-        """Keep card text inside fixed boxes (and defensively strip any leaked inline Markdown)."""
+        """Keep card text in fixed boxes, truncating at a sentence/word boundary (never mid-word).
+
+        Strips any leaked inline Markdown, then prefers to end on a completed sentence inside the
+        budget; failing that it cuts at the last whole word and adds an ellipsis — so a clipped
+        bullet never reads as a dangling fragment like "… the most" (the v4 complaint).
+        """
         cleaned = design.strip_inline_markdown(text)
-        return cleaned if len(cleaned) <= limit else cleaned[: limit - 3].rstrip(" ,;:") + "..."
+        if len(cleaned) <= limit:
+            return cleaned
+        window = cleaned[:limit]
+        sentence_end = max(window.rfind(". "), window.rfind("! "), window.rfind("? "))
+        if sentence_end >= limit * 0.6:
+            return window[: sentence_end + 1].rstrip()
+        word_cut = window.rsplit(" ", 1)[0].rstrip(" ,;:—–-")
+        return (word_cut or window).rstrip() + "…"
 
     def _body_callout(
         self, slide: Any, text: str, *, top: float = 1.55, fill: str | None = None
@@ -1070,9 +1082,13 @@ class _DeckRenderer:
             )
 
     def _compact_list(self, slide: Any, items: list[str], *, top: float = 1.75) -> None:
-        """Render appendix/source lines in two dense but readable columns."""
+        """Render appendix/source lines in two dense, readable columns (mono, numbered references).
+
+        Items arrive pre-numbered ("07  domain — title"), so the mono face + the leading index read
+        as one consistent reference list — every appendix page in the same style (no stray bullet).
+        """
         inches = self._Inches
-        lines = [self._short(item, 120) for item in (items or ["-"])][:18]
+        lines = [self._short(item, 116) for item in (items or ["-"])][:18]
         for idx, line in enumerate(lines):
             col = idx % 2
             row = idx // 2
@@ -1080,13 +1096,14 @@ class _DeckRenderer:
             y = top + row * 0.52
             self._text(
                 slide,
-                f"- {line}",
+                line,
                 inches(left),
                 inches(y),
                 inches(5.55),
                 inches(0.42),
                 9,
                 self.colors.charcoal,
+                font=self._font_mono,
             )
 
     def _spot_color(self) -> str:
@@ -1388,26 +1405,39 @@ class _DeckRenderer:
         return self.prs.slides.add_slide(self._blank)
 
     def _try_chart(self, slide: Any, sc: SlideContent, *, top: float) -> bool:
-        """Render the slide's ``.visual`` as a native editable chart in the body area (fail-open).
+        """Render the slide's ``.visual`` as a themed image-chart (fail-open to a native chart).
 
-        Respects ``style.max_charts_per_deck`` and the master ``charts_enabled`` switch. Returns
-        False — so the caller falls back to cards/table — when there is no visual, the budget is
-        spent, charts are disabled, or :func:`core.visuals.add_native_chart` fails on this slide.
+        Respects ``style.max_charts_per_deck`` and the master ``charts_enabled`` switch. Prefers the
+        magazine-grade matplotlib image-chart (Editorial palette + the deck's fonts, labeled axes);
+        if that fails it falls back to the native editable chart, then to cards/table. Returns False
+        when there is no visual, the budget is spent, charts are disabled, or both renderers fail.
         """
         if sc.visual is None or not self.style.charts_enabled:
             return False
         if self._charts_used >= self._max_charts:
             return False
         height = max(2.4, min(3.7, 6.55 - top))
-        ok = visuals.add_native_chart(
+        ok = charts_image.add_image_chart(
             slide,
             sc.visual,
             self.colors,
+            self.style,
             left_in=0.72,
             top_in=top,
             width_in=11.75,
             height_in=height,
+            on_dark=self._slide_on_dark,
         )
+        if not ok:
+            ok = visuals.add_native_chart(
+                slide,
+                sc.visual,
+                self.colors,
+                left_in=0.72,
+                top_in=top,
+                width_in=11.75,
+                height_in=height,
+            )
         if ok:
             self._charts_used += 1
         return ok
@@ -2089,11 +2119,24 @@ class _DeckRenderer:
             self._content_slide(sc, canvas)
 
     def save(self, output_dir: str | Path, title: str) -> Path:
-        """Write the deck to ``output_dir`` and return its path."""
+        """Write the deck to ``output_dir``, embed its fonts for portability, return its path."""
         out = Path(output_dir)
         out.mkdir(parents=True, exist_ok=True)
         path = out / f"{date.today().isoformat()}_{_slug(title)}_deck.pptx"
         self.prs.save(str(path))
+        # Embed the deck's font families so it renders correctly when forwarded to a machine that
+        # does not have them installed (the CEO/board) — fail-open, never blocks the render (REQ-5).
+        font_embed.embed_fonts(
+            path,
+            [
+                self._font_display,
+                self._font_body,
+                self._font_mono,
+                self._font_serif,
+                self._font_statement,
+            ],
+            self.style.fonts_dir,
+        )
         return path
 
 

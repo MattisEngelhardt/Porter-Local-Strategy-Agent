@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import ssl
 import sys
 import urllib.error
@@ -144,6 +146,53 @@ def _fetch(font: _Font, dest_dir: Path, *, context: ssl.SSLContext | None, force
     return True
 
 
+def register_windows_fonts(dest_dir: Path) -> int:
+    """Install the downloaded TTFs for the current Windows user so PowerPoint actually renders them.
+
+    The TTFs only sitting in ``assets/fonts`` are invisible to PowerPoint — it substitutes Calibri,
+    which is the real "one font everywhere" bug. This copies each face into the per-user Fonts
+    directory (no admin needed since Win10 1809), registers it under ``HKCU\\…\\Fonts``, loads it
+    into the session via ``AddFontResourceW``, and broadcasts ``WM_FONTCHANGE`` so running apps pick
+    it up. Idempotent + fail-open; a non-Windows host is a clean no-op. Returns how many registered.
+    """
+    if sys.platform != "win32":
+        print("  --register is Windows-only; skipped (the PDF embeds fonts regardless).")
+        return 0
+    import ctypes  # local: Windows-only GDI/user32 calls
+    import winreg
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        print("  [FAIL] LOCALAPPDATA is unset — cannot locate the per-user Fonts directory.")
+        return 0
+    user_fonts = Path(local_app_data) / "Microsoft" / "Windows" / "Fonts"
+    user_fonts.mkdir(parents=True, exist_ok=True)
+    reg_path = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts"
+
+    registered = 0
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, reg_path, 0, winreg.KEY_SET_VALUE) as key:
+        for font in _FONTS:
+            src = dest_dir / font.dest_name
+            if not src.is_file():
+                continue
+            target = user_fonts / font.dest_name
+            try:
+                if not target.is_file():
+                    shutil.copy2(src, target)
+                ctypes.windll.gdi32.AddFontResourceW(str(target))  # type: ignore[attr-defined]
+                winreg.SetValueEx(
+                    key, f"{font.family} (TrueType)", 0, winreg.REG_SZ, str(target)
+                )
+                registered += 1
+            except OSError as exc:
+                print(f"  [warn] {font.family:<22} {exc}")
+
+    # Notify running applications that the font set changed (HWND_BROADCAST, WM_FONTCHANGE).
+    ctypes.windll.user32.SendMessageTimeoutW(0xFFFF, 0x001D, 0, 0, 0, 1000, None)  # type: ignore[attr-defined]
+    print(f"  registered {registered}/{len(_FONTS)} fonts for the current user.")
+    return registered
+
+
 def main(argv: list[str] | None = None) -> int:
     """Install the curated OFL font library; return 0 when all families are present, else 1."""
     parser = argparse.ArgumentParser(description="Install Porter's curated OFL font library.")
@@ -156,6 +205,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Disable TLS verification (only for corporate cert-revocation boxes).",
     )
+    parser.add_argument(
+        "--register",
+        action="store_true",
+        help="After download, install the TTFs for the current Windows user so PowerPoint renders "
+        "them (the deck always embeds its fonts regardless).",
+    )
     args = parser.parse_args(argv)
 
     dest_dir: Path = args.dest
@@ -167,13 +222,16 @@ def main(argv: list[str] | None = None) -> int:
 
     ok = sum(results)
     print(f"\n{ok}/{len(_FONTS)} fonts installed.")
+    if args.register:
+        print("Registering fonts with the OS ...")
+        register_windows_fonts(dest_dir)
     if ok < len(_FONTS):
         print(
             "Some downloads failed (network/proxy/rate-limit?). The renderers fall back to system "
             "fonts, so output still works — re-run later (try --insecure behind a corporate proxy)."
         )
         return 1
-    print("Done — the PDF embeds the fonts; PowerPoint uses them by name (install OS-wide).")
+    print("Done — the PDF embeds the fonts; the deck embeds + (with --register) installs them.")
     return 0
 
 

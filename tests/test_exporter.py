@@ -413,9 +413,22 @@ def _gradient_count(prs: object) -> int:
     return count
 
 
-def test_build_deck_renders_native_chart_from_visual(tmp_path: Path) -> None:
-    """A slide carrying a ``.visual`` renders a native (editable) python-pptx chart."""
+def _chart_count(prs: object) -> int:
+    """Count rendered charts — a themed image-chart (picture) or a fail-open native chart."""
+    return sum(
+        1
+        for slide in prs.slides  # type: ignore[attr-defined]
+        for shape in slide.shapes
+        if getattr(shape, "has_chart", False) or getattr(shape, "shape_type", None) == 13
+    )
+
+
+def test_build_deck_renders_chart_from_visual(tmp_path: Path) -> None:
+    """A slide carrying a ``.visual`` renders a chart (themed image-chart, native as fallback)."""
     pptx = pytest.importorskip("pptx")
+    config = AppConfig()
+    config.output.include_logo = False  # isolate: the only picture should be the chart
+    config.output.imagery_dir = str(tmp_path / "no-imagery")
     deck = DeckStructure(
         title="Charted",
         language=Language.EN,
@@ -428,15 +441,17 @@ def test_build_deck_renders_native_chart_from_visual(tmp_path: Path) -> None:
             ),
         ],
     )
-    path = build_deck(deck, AppConfig(), tmp_path)
+    path = build_deck(deck, config, tmp_path)
     prs = pptx.Presentation(str(path))
-    assert any(getattr(shape, "has_chart", False) for slide in prs.slides for shape in slide.shapes)
+    assert _chart_count(prs) >= 1
 
 
 def test_build_deck_chart_budget_caps_visuals(tmp_path: Path) -> None:
-    """No more than ``style.max_charts_per_deck`` native charts are rendered (rest fall back)."""
+    """No more than ``style.max_charts_per_deck`` charts are rendered (the rest fall back)."""
     pptx = pytest.importorskip("pptx")
     config = AppConfig()
+    config.output.include_logo = False  # isolate charts from the logo picture
+    config.output.imagery_dir = str(tmp_path / "no-imagery")
     config.output.style.max_charts_per_deck = 1
     slides = [SlideContent(slide_type=SlideType.TITLE, headline="Many charts")]
     slides += [
@@ -450,10 +465,7 @@ def test_build_deck_chart_budget_caps_visuals(tmp_path: Path) -> None:
     deck = DeckStructure(title="Capped", language=Language.EN, slides=slides)
     path = build_deck(deck, config, tmp_path)
     prs = pptx.Presentation(str(path))
-    charts = sum(
-        1 for slide in prs.slides for shape in slide.shapes if getattr(shape, "has_chart", False)
-    )
-    assert charts == 1
+    assert _chart_count(prs) == 1
 
 
 def test_title_cover_uses_dark_editorial_canvas(tmp_path: Path) -> None:
