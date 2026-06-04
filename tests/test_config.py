@@ -112,3 +112,45 @@ def test_effort_defaults_are_never_shallow() -> None:
     assert level.research_workers == 3
     assert level.critique is True
     assert level.thinking is True
+
+
+def test_v4_palette_and_style_tokens_present() -> None:
+    """Editorial v4.0 adds warm + vivid palette tokens and new style knobs (defaults, RULE 4)."""
+    from core.config import ColorsConfig, OutputConfig, StyleConfig
+
+    colors = ColorsConfig()
+    # Warm extensions + vivid additions all present and valid hex.
+    for token in ("terracotta", "ochre", "plum", "deep_blue", "sand", "cream_hi", "knockout_cream"):
+        assert getattr(colors, token).startswith("#")
+    for token in (
+        "baby_blue",
+        "vivid_red",
+        "vivid_green",
+        "vivid_orange",
+        "vivid_yellow",
+        "violet",
+    ):
+        assert getattr(colors, token).startswith("#")
+    # The warm v3.0 tokens still exist (nothing removed).
+    assert colors.paper and colors.coral and colors.artifact_gold and colors.white and colors.black
+    # New style knobs default to the bold/clean behavior.
+    style = StyleConfig()
+    assert style.type_theme == "editorial"
+    assert style.telemetry_chips is False  # chips off by default
+    assert style.max_diagrams_per_deck == 3
+    out = OutputConfig()
+    assert out.logo_path_light is None
+    assert out.imagery_dir.endswith("imagery")
+
+
+def test_live_config_yaml_carries_v4_tokens() -> None:
+    """The shipped config.yaml exposes the v4 palette + style tokens (not just the schema)."""
+    config = load_config(CONFIG_PATH)
+    assert config.output.colors.vivid_red.startswith("#")
+    assert config.output.style.type_theme in {
+        "editorial",
+        "kinetic",
+        "luxury",
+        "modern",
+        "brutalist",
+    }

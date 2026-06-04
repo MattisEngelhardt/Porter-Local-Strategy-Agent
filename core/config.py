@@ -176,6 +176,21 @@ class ColorsConfig(BaseModel):
     ink: str = "#1A1813"  # near-black editorial text
     canvas_dark: str = "#15140F"  # dramatic dark canvas for cover/divider/recommendation
     coral: str = "#E4572E"  # warm attention/risk accent
+    # Editorial v4.0 — warm extensions + vivid statement fields (additive; v3.0 tokens stay).
+    terracotta: str = "#D2693C"  # warm secondary statement field / earthy card
+    ochre: str = "#E0A126"  # warm yellow/gold field (brighter than artifact_gold)
+    plum: str = "#5B3A57"  # deep muted plum field — cool counterweight, adds rhythm
+    deep_blue: str = "#1B3A6B"  # saturated editorial blue (table headers / depth)
+    sand: str = "#EDE3D2"  # warm sand — a second light content canvas (alternate to paper)
+    cream_hi: str = "#FAF6EE"  # bright cream for negative-space editorial-split slides
+    knockout_cream: str = "#F7F1E6"  # warm off-white headline text on saturated/dark fields
+    # Vivid statement palette (baby blue, strong red, green, orange, yellow, violet).
+    baby_blue: str = "#7CC6FE"
+    vivid_red: str = "#E5383B"
+    vivid_green: str = "#2DBE6C"
+    vivid_orange: str = "#F4791F"
+    vivid_yellow: str = "#FFC93C"
+    violet: str = "#7B3FE4"
 
 
 class StyleConfig(BaseModel):
@@ -192,11 +207,14 @@ class StyleConfig(BaseModel):
     grotesk_font: str = "Space Grotesk"  # PPTX display grotesk (fallback: Aptos)
     body_font: str = "Inter"  # body text (fallback: Aptos / Segoe UI)
     mono_font: str = "Space Mono"  # tracked micro-labels (fallback: Consolas)
+    type_theme: str = "editorial"  # core.typography: editorial|kinetic|luxury|modern|brutalist
     fonts_dir: str = "./assets/fonts"  # shipped OFL TTFs embedded into the PDF if found
     charts_enabled: bool = True  # master switch for the visual engine
     max_charts_per_deck: int = Field(default=4, ge=0)
     max_charts_per_brief: int = Field(default=3, ge=0)
     dedicated_visual_call: bool = False  # laptop default: fold visuals into shape_deck (0 extra)
+    telemetry_chips: bool = False  # render SOURCES/WORKERS/CONFIDENCE/AS-OF chips on slides (off)
+    max_diagrams_per_deck: int = Field(default=3, ge=0)  # native diagram budget per deck
 
 
 class OutputConfig(BaseModel):
@@ -211,6 +229,11 @@ class OutputConfig(BaseModel):
     # commit+push it (fail-open; never breaks a run). Demos are test runs, so every run qualifies.
     auto_promote_demo: bool = True
     demo_min_score: int = 0  # only promote a deck whose critic score is at least this floor
+    # Optional light-on-dark logo variant for the dark cover/divider canvas (None = reuse logo_path
+    # with reduced opacity). Avoids a dark logo vanishing on the dark canvas (Block 5.0).
+    logo_path_light: str | None = None
+    # Curated Neura brand imagery (robots/logo) for the cover; empty/missing → gradient cover.
+    imagery_dir: str = "./assets/imagery"
     # Optional explicit GTK3-runtime bin dir for WeasyPrint on Windows (None = auto-detect
     # standard locations). Forced ahead of any incompatible libgobject on PATH (e.g. Tesseract).
     gtk_runtime_path: str | None = None
