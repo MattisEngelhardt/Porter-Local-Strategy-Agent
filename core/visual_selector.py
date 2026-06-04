@@ -17,6 +17,11 @@ renderers own the per-deck/brief chart budget and the fail-open fallbacks. Pure,
 from __future__ import annotations
 
 from core.config import StyleConfig
+from core.diagrams import (
+    kpi_strip_from_lines,
+    process_from_bullets,
+    validate_diagram,
+)
 from core.visuals import (
     chart_from_pairs,
     numbers_from_text,
@@ -24,6 +29,7 @@ from core.visuals import (
     validate_spec,
 )
 from models.deck import DeckStructure, SlideContent, SlideType
+from models.diagram import DiagramSpec
 from models.research import ResearchReport
 from models.synthesis import AnalysisOutput, Section
 from models.visuals import ChartSpec, ChartType
@@ -141,6 +147,49 @@ def attach_deck_visuals(
         updated.append(
             slide if visual is slide.visual else slide.model_copy(update={"visual": visual})
         )
+    return deck.model_copy(update={"slides": updated})
+
+
+def _diagram_for_slide(slide: SlideContent) -> DiagramSpec | None:
+    """Pick a native schematic for a data slide that has no chart (KPI strip / process flow)."""
+    if slide.slide_type not in _DATA_SLIDE_TYPES or slide.table:
+        return None  # comparison tables keep their table; non-data slides keep their identity
+    bullets = [str(b) for b in slide.bullets if str(b).strip()]
+    kpi = kpi_strip_from_lines(bullets)
+    if kpi is not None:
+        return kpi
+    if slide.slide_type == SlideType.STRATEGIC_SIGNALS:
+        return process_from_bullets(bullets)
+    return None
+
+
+def attach_deck_diagrams(
+    deck: DeckStructure,
+    analysis: AnalysisOutput,
+    report: ResearchReport | None,
+    style: StyleConfig,
+) -> DeckStructure:
+    """Attach a grounded native diagram to data slides that did NOT get a chart (one big visual).
+
+    Runs AFTER :func:`attach_deck_visuals` so charts win (a slide already carrying a ``visual`` is
+    skipped). A KPI strip is derived from a slide's numeric bullets, a process flow from a
+    strategic-signals slide's steps — both arrange existing content only and pass
+    :func:`validate_diagram` (anti-hallucination). Respects ``style.max_diagrams_per_deck``.
+    """
+    if not style.charts_enabled or style.max_diagrams_per_deck <= 0:
+        return deck
+    evidence = _evidence_corpus(analysis, report)
+    used = 0
+    updated: list[SlideContent] = []
+    for slide in deck.slides:
+        spec: DiagramSpec | None = None
+        if slide.diagram is None and slide.visual is None and used < style.max_diagrams_per_deck:
+            spec = validate_diagram(_diagram_for_slide(slide), evidence)
+        if spec is not None:
+            used += 1
+            updated.append(slide.model_copy(update={"diagram": spec}))
+        else:
+            updated.append(slide)
     return deck.model_copy(update={"slides": updated})
 
 

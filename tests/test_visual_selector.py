@@ -8,8 +8,13 @@ slides/sections, an ungrounded or invented spec is dropped (anti-hallucination),
 from __future__ import annotations
 
 from core.config import StyleConfig
-from core.visual_selector import attach_brief_visuals, attach_deck_visuals
+from core.visual_selector import (
+    attach_brief_visuals,
+    attach_deck_diagrams,
+    attach_deck_visuals,
+)
 from models.deck import DeckStructure, SlideContent, SlideType
+from models.diagram import DiagramType
 from models.research import Finding, ResearchReport, WorkerFindings
 from models.synthesis import AnalysisOutput, Section
 from models.task import Language
@@ -174,6 +179,63 @@ def test_attach_deck_visuals_respects_master_switch() -> None:
 
 
 # ----------------------------------------------------------------- brief selection
+def test_attach_deck_diagrams_grounded_kpi_strip() -> None:
+    """A data slide with grounded numbers and no chart gets a native KPI-strip diagram."""
+    deck = DeckStructure(
+        title="T",
+        language=Language.EN,
+        slides=[
+            SlideContent(
+                slide_type=SlideType.STRATEGIC_SIGNALS,
+                headline="Signals",
+                bullets=["Figure 39", "Apptronik 12", "Sanctuary 7"],
+            )
+        ],
+    )
+    out = attach_deck_diagrams(deck, _analysis(), None, StyleConfig())
+    assert out.slides[0].diagram is not None
+    assert out.slides[0].diagram.diagram_type == DiagramType.KPI_STRIP
+
+
+def test_attach_deck_diagrams_chart_wins_over_diagram() -> None:
+    """A slide already carrying a chart keeps it — no diagram is attached (one big visual)."""
+    deck = DeckStructure(
+        title="T",
+        language=Language.EN,
+        slides=[
+            SlideContent(
+                slide_type=SlideType.STRATEGIC_SIGNALS,
+                headline="Has chart",
+                bullets=["Figure 39", "Apptronik 12"],
+                visual=ChartSpec(
+                    chart_type=ChartType.COLUMN,
+                    categories=["a", "b"],
+                    series=[ChartSeries(name="x", values=[1.0, 2.0])],
+                ),
+            )
+        ],
+    )
+    out = attach_deck_diagrams(deck, _analysis(), None, StyleConfig())
+    assert out.slides[0].diagram is None
+
+
+def test_attach_deck_diagrams_respects_budget() -> None:
+    """``max_diagrams_per_deck`` of 0 attaches no diagrams (the budget contract)."""
+    deck = DeckStructure(
+        title="T",
+        language=Language.EN,
+        slides=[
+            SlideContent(
+                slide_type=SlideType.STRATEGIC_SIGNALS,
+                headline="Signals",
+                bullets=["Figure 39", "Apptronik 12"],
+            )
+        ],
+    )
+    out = attach_deck_diagrams(deck, _analysis(), None, StyleConfig(max_diagrams_per_deck=0))
+    assert out.slides[0].diagram is None
+
+
 def test_attach_brief_visuals_column_and_copy_is_nondestructive() -> None:
     """A numeric section body gets a captioned column chart; the original analysis is untouched."""
     analysis = _analysis(
