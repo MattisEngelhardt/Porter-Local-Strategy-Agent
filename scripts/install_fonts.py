@@ -1,17 +1,18 @@
-"""Install the four Porter Editorial OFL fonts into ``assets/fonts`` (REQ-1/2: local, free, OFL).
+"""Install Porter's curated OFL font library into ``assets/fonts`` (REQ-1/2: local, free, OFL).
 
-Porter's PDF brief embeds and the PPTX deck names a four-family type system (``core.design``):
+Porter's type system (``core.typography``) draws from a pool of 25+ SIL Open Font License
+families on Google Fonts, grouped by role (serif display / grotesk / expressive display / mono)
+and paired into type-themes. This script fetches each family's TTF (and its OFL licence) into
+``assets/fonts`` with a clean filename so ``core.exporter._font_face_css`` matches it by name
+(``PlayfairDisplay.ttf`` → family "Playfair Display") and auto-embeds it in the PDF. The PPTX deck
+references families by name (PowerPoint substitutes if a family is not installed system-wide).
 
-* **Fraunces**       — serif display headlines (PDF)
-* **Space Grotesk**  — grotesk display (deck headlines / brief accents)
-* **Inter**          — body text
-* **Space Mono**     — tracked micro-labels / telemetry
+To pick the right file resiliently, the script **lists each family's ``ofl/<dir>`` directory via the
+GitHub contents API** and chooses the best TTF (a variable ``[wght]`` face, else ``*-Regular.ttf``),
+so it does not break when Google Fonts renames a variable-font file.
 
-All four are SIL Open Font License fonts from Google Fonts. This script fetches each TTF (and its
-OFL licence) into ``assets/fonts`` with a clean filename so ``core.exporter._font_face_css`` matches
-it by the family's normalised name (``Fraunces*.ttf`` → family "Fraunces", etc.) and auto-embeds it
-in the PDF. **Fully optional:** if the directory is absent the renderers degrade to the system-font
-fallbacks (Georgia / Aptos / Consolas) — output is never broken, just less branded (REQ-5).
+**Fully optional:** if the directory is absent the renderers degrade to system-font fallbacks
+(Georgia / Aptos / Consolas) — output is never broken, just less branded (REQ-5).
 
 Usage (from the repo root, inside the venv)::
 
@@ -19,12 +20,13 @@ Usage (from the repo root, inside the venv)::
     .venv\\Scripts\\python scripts\\install_fonts.py --insecure   # corporate cert-revocation box
     .venv\\Scripts\\python scripts\\install_fonts.py --force      # re-download even if present
 
-Stdlib only (urllib) — no new dependency, in keeping with the locked "zero new code deps" decision.
+Stdlib only (urllib + json) — no new dependency.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import ssl
 import sys
 import urllib.error
@@ -32,68 +34,119 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-# Google Fonts raw repo root (the canonical OFL source for all four families).
-_GF_RAW = "https://raw.githubusercontent.com/google/fonts/main/ofl"
+# GitHub contents API (directory listing) + raw repo root.
+_GH_API = "https://api.github.com/repos/google/fonts/contents/ofl"
 
 
 @dataclass(frozen=True)
 class _Font:
-    """One OFL family to install: its Google Fonts dir, the source TTF, and a clean dest name."""
+    """One OFL family to install: its ``ofl/<dir>`` folder and a clean local filename."""
 
     family: str
-    gf_dir: str  # subfolder under ofl/
-    src_file: str  # the file in the repo (URL-encoded for [ ] , in variable-font names)
+    gf_dir: str  # subfolder under ofl/ (lowercase, no spaces — Google Fonts convention)
     dest_name: str  # clean local filename so ``_font_face_css`` matches the family
 
 
-# Variable fonts cover the full weight range Porter uses (font-weight: 100 900 in the @font-face).
+# The curated >=20-family library (kept in step with ``core.typography.FONT_LIBRARY``).
 _FONTS: tuple[_Font, ...] = (
-    _Font("Fraunces", "fraunces", "Fraunces%5BSOFT%2CWONK%2Copsz%2Cwght%5D.ttf", "Fraunces.ttf"),
-    _Font("Space Grotesk", "spacegrotesk", "SpaceGrotesk%5Bwght%5D.ttf", "SpaceGrotesk.ttf"),
-    _Font("Inter", "inter", "Inter%5Bopsz%2Cwght%5D.ttf", "Inter.ttf"),
-    _Font("Space Mono", "spacemono", "SpaceMono-Regular.ttf", "SpaceMono.ttf"),
+    # Serif display
+    _Font("Fraunces", "fraunces", "Fraunces.ttf"),
+    _Font("Playfair Display", "playfairdisplay", "PlayfairDisplay.ttf"),
+    _Font("DM Serif Display", "dmserifdisplay", "DMSerifDisplay.ttf"),
+    _Font("Bodoni Moda", "bodonimoda", "BodoniModa.ttf"),
+    _Font("Cormorant Garamond", "cormorantgaramond", "CormorantGaramond.ttf"),
+    _Font("Spectral", "spectral", "Spectral.ttf"),
+    _Font("Newsreader", "newsreader", "Newsreader.ttf"),
+    _Font("Instrument Serif", "instrumentserif", "InstrumentSerif.ttf"),
+    # Grotesk / sans
+    _Font("Space Grotesk", "spacegrotesk", "SpaceGrotesk.ttf"),
+    _Font("Inter", "inter", "Inter.ttf"),
+    _Font("Archivo", "archivo", "Archivo.ttf"),
+    _Font("Manrope", "manrope", "Manrope.ttf"),
+    _Font("Sora", "sora", "Sora.ttf"),
+    _Font("Schibsted Grotesk", "schibstedgrotesk", "SchibstedGrotesk.ttf"),
+    _Font("Hanken Grotesk", "hankengrotesk", "HankenGrotesk.ttf"),
+    # Expressive display
+    _Font("Archivo Black", "archivoblack", "ArchivoBlack.ttf"),
+    _Font("Anton", "anton", "Anton.ttf"),
+    _Font("Bebas Neue", "bebasneue", "BebasNeue.ttf"),
+    _Font("Syne", "syne", "Syne.ttf"),
+    _Font("Unbounded", "unbounded", "Unbounded.ttf"),
+    _Font("Big Shoulders Display", "bigshouldersdisplay", "BigShouldersDisplay.ttf"),
+    # Mono
+    _Font("Space Mono", "spacemono", "SpaceMono.ttf"),
+    _Font("JetBrains Mono", "jetbrainsmono", "JetBrainsMono.ttf"),
+    _Font("IBM Plex Mono", "ibmplexmono", "IBMPlexMono.ttf"),
+    _Font("DM Mono", "dmmono", "DMMono.ttf"),
 )
 
 _DEFAULT_DEST = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 
-def _download(url: str, dest: Path, *, context: ssl.SSLContext | None) -> int:
-    """Download ``url`` to ``dest`` and return the byte count (raises on failure)."""
+def _get(url: str, *, context: ssl.SSLContext | None) -> bytes:
+    """HTTP GET ``url`` and return the body (raises on failure)."""
     request = urllib.request.Request(url, headers={"User-Agent": "porter-install-fonts"})
     with urllib.request.urlopen(request, context=context, timeout=60) as response:  # noqa: S310
-        data: bytes = response.read()
-    dest.write_bytes(data)
-    return len(data)
+        body: bytes = response.read()
+    return body
+
+
+def _pick_ttf(entries: list[dict[str, object]]) -> dict[str, object] | None:
+    """Choose the best TTF from a GitHub directory listing (variable ``[wght]`` → ``*-Regular``)."""
+    ttfs = [e for e in entries if str(e.get("name", "")).lower().endswith(".ttf")]
+    if not ttfs:
+        return None
+
+    def score(entry: dict[str, object]) -> tuple[int, int]:
+        name = str(entry.get("name", ""))
+        lower = name.lower()
+        if "[wght" in lower or "wght]" in lower:
+            rank = 0  # variable font carrying a weight axis — full range, preferred
+        elif "[" in name:
+            rank = 1  # other variable font
+        elif lower.endswith("-regular.ttf"):
+            rank = 2
+        else:
+            rank = 3
+        return (rank, len(name))
+
+    return sorted(ttfs, key=score)[0]
 
 
 def _fetch(font: _Font, dest_dir: Path, *, context: ssl.SSLContext | None, force: bool) -> bool:
-    """Fetch one font TTF + its OFL licence into ``dest_dir``. Returns True on success."""
+    """Fetch one family's best TTF + its OFL licence into ``dest_dir``. Returns True on success."""
     ttf_path = dest_dir / font.dest_name
     if ttf_path.is_file() and not force:
-        print(f"  [ok]   {font.family:<14} already present ({ttf_path.name})")
+        print(f"  [ok]   {font.family:<22} already present ({ttf_path.name})")
         return True
-    ttf_url = f"{_GF_RAW}/{font.gf_dir}/{font.src_file}"
     try:
-        size = _download(ttf_url, ttf_path, context=context)
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"  [FAIL] {font.family:<14} {exc}")
+        listing_raw = _get(f"{_GH_API}/{font.gf_dir}", context=context)
+        entries: list[dict[str, object]] = json.loads(listing_raw)
+        best = _pick_ttf(entries)
+        if best is None:
+            print(f"  [FAIL] {font.family:<22} no .ttf found in ofl/{font.gf_dir}")
+            return False
+        ttf_path.write_bytes(_get(str(best["download_url"]), context=context))
+        size = ttf_path.stat().st_size
+        # Best-effort: vendor the licence alongside the font (never fatal).
+        licence = next((e for e in entries if str(e.get("name", "")).upper() == "OFL.TXT"), None)
+        if licence is not None:
+            try:
+                (dest_dir / f"{font.dest_name.removesuffix('.ttf')}-OFL.txt").write_bytes(
+                    _get(str(licence["download_url"]), context=context)
+                )
+            except (urllib.error.URLError, OSError):
+                pass
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, KeyError) as exc:
+        print(f"  [FAIL] {font.family:<22} {exc}")
         return False
-    # Best-effort: vendor the licence alongside the font (OFL distribution courtesy; never fatal).
-    try:
-        _download(
-            f"{_GF_RAW}/{font.gf_dir}/OFL.txt",
-            dest_dir / f"{font.dest_name.removesuffix('.ttf')}-OFL.txt",
-            context=context,
-        )
-    except (urllib.error.URLError, OSError):
-        pass
-    print(f"  [ok]   {font.family:<14} -> {ttf_path.name} ({size // 1024} KB)")
+    print(f"  [ok]   {font.family:<22} -> {ttf_path.name} ({size // 1024} KB)")
     return True
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Install the four Editorial OFL fonts; return 0 when all four are present, else 1."""
-    parser = argparse.ArgumentParser(description="Install Porter Editorial OFL fonts.")
+    """Install the curated OFL font library; return 0 when all families are present, else 1."""
+    parser = argparse.ArgumentParser(description="Install Porter's curated OFL font library.")
     parser.add_argument(
         "--dest", type=Path, default=_DEFAULT_DEST, help="Target dir (default: assets/fonts)."
     )
@@ -109,18 +162,18 @@ def main(argv: list[str] | None = None) -> int:
     dest_dir.mkdir(parents=True, exist_ok=True)
     context = ssl._create_unverified_context() if args.insecure else None  # noqa: SLF001
 
-    print(f"Installing Porter Editorial OFL fonts into {dest_dir} ...")
+    print(f"Installing Porter's OFL font library ({len(_FONTS)} families) into {dest_dir} ...")
     results = [_fetch(font, dest_dir, context=context, force=args.force) for font in _FONTS]
 
     ok = sum(results)
     print(f"\n{ok}/{len(_FONTS)} fonts installed.")
     if ok < len(_FONTS):
         print(
-            "Some downloads failed (network/proxy?). The renderers fall back to system fonts, so "
-            "output still works — re-run later (try --insecure behind a corporate proxy)."
+            "Some downloads failed (network/proxy/rate-limit?). The renderers fall back to system "
+            "fonts, so output still works — re-run later (try --insecure behind a corporate proxy)."
         )
         return 1
-    print("Done - the PDF brief will now embed the branded fonts; PowerPoint uses them by name.")
+    print("Done — the PDF embeds the fonts; PowerPoint uses them by name (install OS-wide).")
     return 0
 
 
