@@ -21,10 +21,6 @@ DESIGN_REVAMP_PROGRESS.md
 DESIGN_REVAMP_BLOCK5_PLAN.md
 demo_prompt.txt
 
-# Local debug screenshots dropped into asset folders — never publish
-assets/imagery/Screenshot*.png
-assets/imagery/Screenshot*.jpg
-
 # Generated outputs (keep the directory, ignore its contents by default).
 # Outputs may contain confidential context, so nothing is published unless
 # explicitly whitelisted below. Curated demo examples (one per format) are
