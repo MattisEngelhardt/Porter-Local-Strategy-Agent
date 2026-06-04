@@ -278,8 +278,8 @@ def test_render_outputs_threads_report_into_both_renderers(
     assert len(files) == 2
 
 
-def test_run_pipeline_renders_live_telemetry_chips_in_deck(tmp_path: Path) -> None:
-    """End-to-end: the report's real counts render as telemetry chips on the .pptx (DNA 6)."""
+def test_run_pipeline_deck_has_no_telemetry_chips_by_default(tmp_path: Path) -> None:
+    """End-to-end: the .pptx no longer carries SOURCES/WORKERS telemetry chips (off by default)."""
     pptx = pytest.importorskip("pptx")
     client = _ScriptedClient(
         intent='{"task_type":"business_case","depth":"deep","audience":"ceo_board","summary":"Japan BC"}',  # noqa: E501
@@ -302,8 +302,8 @@ def test_run_pipeline_renders_live_telemetry_chips_in_deck(tmp_path: Path) -> No
         for shape in slide.shapes
         if shape.has_text_frame
     )
-    assert "SOURCES 12" in text  # report.sources_evaluated reached the renderer
-    assert "WORKERS 3" in text  # report.workers_used reached the renderer
+    assert "SOURCES 12" not in text  # telemetry chips removed from slides by default
+    assert "WORKERS 3" not in text
 
 
 def test_run_pipeline_scoping_guidance_shapes_research_and_synthesis(tmp_path: Path) -> None:

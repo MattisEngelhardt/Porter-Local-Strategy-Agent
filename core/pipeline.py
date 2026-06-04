@@ -55,7 +55,11 @@ from core.playbooks import load_playbooks
 from core.research_agent import ResearchManager
 from core.startup import check_searxng
 from core.synthesizer import compile_cited_sources, quality_check, synthesize
-from core.visual_selector import attach_brief_visuals, attach_deck_visuals
+from core.visual_selector import (
+    attach_brief_visuals,
+    attach_deck_diagrams,
+    attach_deck_visuals,
+)
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.research import DocContent, ResearchReport
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, SynthesisInput
@@ -417,6 +421,7 @@ def _render_outputs(
                 client, intent, analysis, use_thinking=think, propose_visuals=propose_visuals
             )
             deck_structure = attach_deck_visuals(deck_structure, analysis, report, style)
+            deck_structure = attach_deck_diagrams(deck_structure, analysis, report, style)
             deck = build_deck(
                 deck_structure, config, out_dir, analysis=analysis, research_report=report
             )

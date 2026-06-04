@@ -15,7 +15,7 @@ from core.artifact_framework import ArtifactKind, framework_prompt
 from core.exporter import management_deck_structure
 from core.json_utils import extract_json_array, extract_json_object
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.deck import DeckStructure, SlideContent, SlideType
+from models.deck import Archetype, DeckStructure, SlideContent, SlideType
 from models.synthesis import AnalysisOutput
 from models.task import Intent, Language, TaskType
 from models.visuals import ChartSeries, ChartSpec, ChartType
@@ -178,6 +178,16 @@ def _coerce_visual(value: object) -> ChartSpec | None:
         return None
 
 
+def _coerce_archetype(value: object) -> Archetype:
+    """Coerce an optional coarse layout hint into :class:`Archetype` (unknown → AUTO)."""
+    if isinstance(value, str):
+        try:
+            return Archetype(value.strip().lower())
+        except ValueError:
+            return Archetype.AUTO
+    return Archetype.AUTO
+
+
 def _coerce_slides(array: list[object] | None, analysis: AnalysisOutput) -> list[SlideContent]:
     """Coerce the LLM's JSON array into validated :class:`SlideContent` objects (tolerant)."""
     if not array:
@@ -191,6 +201,7 @@ def _coerce_slides(array: list[object] | None, analysis: AnalysisOutput) -> list
         if slide_type is None or not headline:
             continue
         body = item.get("body")
+        emphasis = item.get("emphasis")
         slides.append(
             SlideContent(
                 slide_type=slide_type,
@@ -199,6 +210,12 @@ def _coerce_slides(array: list[object] | None, analysis: AnalysisOutput) -> list
                 body=str(body).strip() if isinstance(body, str) and body.strip() else None,
                 table=_coerce_table(item.get("table")),
                 visual=_coerce_visual(item.get("visual")),
+                # Optional coarse design hints (honored by core.deck_director when an LLM emits
+                # them; absent by default → AUTO → the deterministic director decides, unchanged).
+                archetype=_coerce_archetype(item.get("archetype")),
+                emphasis=str(emphasis).strip()
+                if isinstance(emphasis, str) and emphasis.strip()
+                else None,
             )
         )
     return slides
