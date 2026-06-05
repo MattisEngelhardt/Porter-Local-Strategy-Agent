@@ -1,18 +1,23 @@
 llm:
   provider: "lmstudio"
   base_url: "http://localhost:1234"    # Change to switch backend
-  model: "Porter-LMStudio"
-  num_ctx: 32768                        # CRITICAL: Always passed to API — never rely on default
+  model: "Porter-12B"
+  num_ctx: 65536                        # CRITICAL: Always passed to API (--context-length) — never the 4096 default.
+                                        #   64K window: a real high-effort prompt (brain.md + research + sources)
+                                        #   measured ~39.3K tokens and overflowed 32K (n_keep > n_ctx 400). Switch
+                                        #   profiles with switch-model.ps1 (porter12b | porter12b-128k | porter12b-max | gemma4).
   temperature: 0.2
   thinking_mode: true
   capabilities:
     vision: true
-    context_window: 131072
-    practical_context: 32768
+    context_window: 262144
+    practical_context: 65536
   embedding_model: "text-embedding-nomic-embed-text-v1.5"
-  # KV cache optimization — set as SYSTEM environment variable, NOT read from this file:
-  # Windows: setx OLLAMA_KV_CACHE_TYPE q8_0
-  # Only needed if VRAM is tight with 32K context. Not required for Phase 1.
+  # KV cache optimization (LM Studio backend): set per-model in LM Studio, NOT read from this file.
+  #   GUI: model → Load → Advanced → K/V Cache Quantization Type = Q8_0 (Flash Attention already on).
+  #   Q8 ~halves KV-cache VRAM (~57→~29 KB/token), so 64K fits fully on the 8 GB GPU at full speed;
+  #   without it 64K ≈ 9.6 GiB and ~1.6 GiB spills to system RAM (still works, just slower).
+  #   `lms load` inherits this per-model default. (Ollama equivalent: setx OLLAMA_KV_CACHE_TYPE q8_0)
 
 research:
   searxng_url: "http://localhost:8888"
@@ -63,7 +68,9 @@ effort:                                # Phase 3.5 master dial — auto-detected
       max_fetch_per_worker: 8
       max_clarifications: 3
       max_midresearch_questions: 2
-      revisions: 2
+      revisions: 1                     # was 2 — one targeted rewrite at the end (initial critique +
+                                       #   1 revise + 1 re-critique). Halves the heavy end-stage
+                                       #   LLM load; set 0 to critique-and-ship with no rewrite.
       critique: true
       thinking: true
 

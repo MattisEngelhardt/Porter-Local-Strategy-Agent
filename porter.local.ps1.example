@@ -152,9 +152,22 @@ $ctx            = Read-LlmField "num_ctx"
 if (-not $ctx) { $ctx = "32768" }
 $embeddingModel = Read-LlmField "embedding_model"  # tiny CPU model; pre-loaded for memory/RAG
 
-# If you renamed the model with a custom --identifier (so llm.model is NOT a real downloaded
-# model key), set the underlying model key here. Leave "" to load llm.model directly.
-$baseModel = ""                             # e.g. "google/gemma-4-e4b"
+# llm.model is the API identifier Porter talks to. For LM Studio profiles, map that
+# stable identifier to the real downloaded model key and GPU offload policy.
+# Unknown identifiers still load directly, so hand-set llm.model values keep working.
+$ModelProfiles = @{
+    "Porter-12B"       = @{ model = "google/gemma-4-12b"; gpu = "max" }
+    "Porter-LMStudio" = @{ model = "google/gemma-4-e4b";  gpu = "max" }
+}
+$profile = $ModelProfiles[$modelId]
+$baseModel = ""
+$gpuOffload = "max"
+if ($profile) {
+    $baseModel = [string]$profile.model
+    $gpuOffload = [string]$profile.gpu
+}
+$profileSignature = "$modelId|$baseModel|ctx=$ctx|gpu=$gpuOffload"
+$profileStatePath = Join-Path $root ".porter-lmstudio-profile"
 
 $lms     = Join-Path $HOME ".lmstudio\bin\lms.exe"
 $apiBase = "http://localhost:1234/v1"
@@ -270,11 +283,13 @@ function Get-RuntimeCandidates {
 function Invoke-Load {
     # Load the model under $modelId; success = exit 0 AND served AND actually responds.
     # If $baseModel is set, llm.model is a custom identifier for it; else load it directly.
-    if ($baseModel) { $a = @('load', $baseModel, '--identifier', $modelId, '--context-length', $ctx, '--gpu', 'max', '-y') }
-    else            { $a = @('load', $modelId,   '--context-length', $ctx, '--gpu', 'max', '-y') }
+    if ($baseModel) { $a = @('load', $baseModel, '--identifier', $modelId, '--context-length', $ctx, '--gpu', $gpuOffload, '-y') }
+    else            { $a = @('load', $modelId,   '--context-length', $ctx, '--gpu', $gpuOffload, '-y') }
     if ((Invoke-Lms $a) -ne 0) { return $false }
     if ((Get-ServedIds) -notcontains $modelId) { return $false }
-    return (Test-ModelResponds)
+    if (-not (Test-ModelResponds)) { return $false }
+    [System.IO.File]::WriteAllText($profileStatePath, $profileSignature, [System.Text.UTF8Encoding]::new($false))
+    return $true
 }
 
 # --- 1. ensure the server is up (cold start: launch the backend if needed) ---
@@ -285,8 +300,10 @@ if ($null -eq $ids) {
     if ($null -eq $ids) { $ids = @() }
 }
 
-# --- 2. load the chat model only if it isn't already serving ---------------
-if ($ids -notcontains $modelId) {
+# --- 2. load the chat model only if the active model/profile is not serving -
+$loadedProfile = ""
+if (Test-Path $profileStatePath) { $loadedProfile = ([System.IO.File]::ReadAllText($profileStatePath)).Trim() }
+if (($ids -notcontains $modelId) -or ($loadedProfile -ne $profileSignature)) {
     Write-Host "[porter] loading '$modelId' into LM Studio..." -ForegroundColor Cyan
     $null = Invoke-Lms @('unload', '--all')   # clear any ghost holding the identifier + free VRAM
 

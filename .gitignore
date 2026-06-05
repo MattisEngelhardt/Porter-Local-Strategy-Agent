@@ -45,6 +45,7 @@ data/cache/
 
 # Machine-specific porter pre-launch hook (e.g. auto-start LM Studio) — local only
 porter.local.ps1
+.porter-lmstudio-profile
 
 # Editorial OFL fonts — fetched locally via `scripts/install_fonts.py`, not vendored as binaries
 # (REQ-1/2: local/free/OFL). Absent dir → renderers degrade to system fonts (REQ-5). README stays.
@@ -74,3 +75,8 @@ searxng-data/certs/*
 # Docker tutorial (not part of the project)
 welcome-to-docker/
 .git_commit_msg.txt
+
+# Cloud-Provider Testmodus (Nemotron via OpenRouter) — local-only helpers, never commit.
+# (The API key lives in the already-ignored .env above.)
+porter-nemotron.ps1
+config.nemotron.yaml
