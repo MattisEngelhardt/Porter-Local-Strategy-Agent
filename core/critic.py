@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from core.json_utils import extract_json_object
 from core.playbooks import Playbooks
-from core.synthesizer import build_system_prompt, build_user_prompt, parse_analysis
+from core.synthesizer import build_budgeted_user_prompt, build_system_prompt, parse_analysis
 from llm.local_llm_client import LLMError, LocalLLMClient
 from models.synthesis import AnalysisOutput, CriterionResult, Critique, SynthesisInput
 from models.task import Intent, Language
@@ -183,14 +183,20 @@ def revise(
     issues = (
         "\n".join(f"- {issue}" for issue in critique_result.issues) or "- improve overall rigor"
     )
-    user = (
-        f"{build_user_prompt(synthesis_input)}\n\n"
-        "--- REVISION TASK ---\n"
+    # The revision suffix (prior draft + flagged issues) rides on top of the evidence prompt, so
+    # charge its length against the same context budget — else the rewrite silently overflows
+    # num_ctx and fail-opens to the un-revised draft (wasting the revision round).
+    suffix = (
+        "\n\n--- REVISION TASK ---\n"
         f"Your previous DRAFT was:\n{_serialize_analysis(analysis)}\n\n"
         "A reviewer flagged these issues — fix EACH one while keeping what was strong "
         f"(especially sourcing every material claim):\n{issues}\n\n"
         "Return the improved analysis as the specified JSON now."
     )
+    evidence_prompt = build_budgeted_user_prompt(
+        client, synthesis_input, system, extra_chars=len(suffix)
+    )
+    user = evidence_prompt + suffix
     try:
         response = client.generate(user, system=system, use_thinking=True)
     except LLMError:

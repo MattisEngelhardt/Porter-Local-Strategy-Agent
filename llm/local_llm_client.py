@@ -93,6 +93,11 @@ class LocalLLMClient:
         return self._provider
 
     @property
+    def num_ctx(self) -> int:
+        """The configured context window (tokens) — the budget callers size prompts against."""
+        return self._num_ctx
+
+    @property
     def embedding_model(self) -> str:
         """The configured embedding model name (never hardcoded; used by the memory layer)."""
         return self._embedding_model

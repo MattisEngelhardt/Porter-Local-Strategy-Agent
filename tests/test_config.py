@@ -38,7 +38,7 @@ def test_live_config_llm_matches_active_backend() -> None:
     """
     llm = load_config(CONFIG_PATH).llm
     # Invariants that must hold on every backend:
-    assert llm.num_ctx == 32768  # CRITICAL: never the 4096 default (N-1)
+    assert llm.num_ctx == 65536  # CRITICAL: never the 4096 default; 64K window (was 32K, overflowed at 39.3K)
     assert llm.thinking_mode is True
     assert llm.base_url.startswith("http")
     assert llm.model  # a model name is configured

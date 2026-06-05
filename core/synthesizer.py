@@ -14,18 +14,35 @@ Output rendering to PDF/PPTX/Excel is Phase 4 — this module stops at the struc
 
 from __future__ import annotations
 
-from core.artifact_framework import framework_prompt
 from core.json_utils import extract_json_object
 from core.playbooks import Playbooks, load_playbooks
 from core.researcher import classify_tier
 from llm.local_llm_client import LLMError, LocalLLMClient
-from models.research import ResearchReport, SourceTier
+from models.research import FetchedContent, ResearchReport, SourceTier
 from models.synthesis import AnalysisOutput, Section, SourceRef, SynthesisInput
-from models.task import Depth, Intent, Language, OutputFormat
+from models.task import Depth, Intent, Language
 
 # Per-source / per-document excerpt caps so several sources fit comfortably in num_ctx (32768).
 _MAX_SOURCE_CHARS = 1800
 _MAX_DOC_CHARS = 2500
+
+# Context-budget guardrails. An ultra run reads dozens of pages; dumping all of them plus the
+# brain + 4 playbooks into one synthesis call pushed the prompt to ~41k tokens against a 32k
+# window — the exact `n_keep > n_ctx` 400 the board run hit. We therefore size the *raw* research
+# evidence (the bulk, already distilled into the findings digest) to whatever budget is left after
+# the fixed parts, and reserve room for the model's own answer.
+#   * _CHARS_PER_TOKEN is deliberately LOW so chars→tokens OVER-counts (trims earlier) on the
+#     URL-dense, mixed DE/EN evidence Gemma tokenizes less efficiently than plain English.
+#   * _OUTPUT_RESERVE_TOKENS keeps headroom for the JSON analysis (+ thinking) the model emits.
+_CHARS_PER_TOKEN = 3.2
+_OUTPUT_RESERVE_TOKENS = 5000
+_MIN_EVIDENCE_CHARS = 2000  # always show at least the top source(s), even on a tight window
+_MAX_FINDINGS_DIGEST_CHARS = 14000  # the distilled signal is kept, but never unbounded
+# Hard cap on raw sources handed to the synthesis call. The workers already distilled every source
+# into the findings digest, so a small local model reasons BETTER over the ~12 best raw pages than
+# over 35+ — fewer tokens, higher signal-to-noise, less "lost in the middle". The full source set
+# still reaches the deck's bibliography via compile_cited_sources (unaffected by this cap).
+_MAX_EVIDENCE_SOURCES = 12
 
 _ROLE = (
     "You are a senior strategy analyst supporting the CEO Office and Corporate Development team "
@@ -47,7 +64,14 @@ _RESPONSE_FORMAT = (
 
 
 def build_system_prompt(intent: Intent, brain: str, playbooks: Playbooks) -> str:
-    """Assemble the synthesis system prompt: role + language + brain + 3 playbooks + format."""
+    """Assemble the synthesis system prompt: role + language + brain + 3 playbooks + format.
+
+    The PDF/PPTX artifact framework is deliberately **not** injected here: synthesis only produces
+    the structured analysis (bottom line + sections + sources), and the artifact rules apply later —
+    enforced by the output critic (``core.critic`` criterion 10) and applied by the content shaper /
+    design system. Keeping ~3–4k tokens of layout rules out of the reasoning call sharpens a small
+    local model and leaves more of the context window for evidence (it was instruction overload).
+    """
     language = "German" if intent.language == Language.DE else "English"
     parts = [_ROLE, f"\nWrite ALL output in {language}."]
     if brain.strip():
@@ -59,15 +83,21 @@ def build_system_prompt(intent: Intent, brain: str, playbooks: Playbooks) -> str
         "\n# ANALYSIS PLAYBOOK — apply the framework matching the task type\n" + playbooks.analysis
     )
     parts.append("\n# OUTPUT PLAYBOOK\n" + playbooks.output)
-    if any(fmt in {OutputFormat.BRIEF, OutputFormat.DECK} for fmt in intent.output_formats):
-        parts.append("\n# PDF/PPTX ARTIFACT FRAMEWORK\n" + playbooks.artifact_framework)
-        parts.append("\n" + framework_prompt())
     parts.append("\n" + _RESPONSE_FORMAT)
     return "\n".join(parts)
 
 
-def build_user_prompt(synthesis_input: SynthesisInput) -> str:
-    """Assemble the user prompt: the task + tiered research evidence + provided documents."""
+def build_user_prompt(
+    synthesis_input: SynthesisInput, evidence_budget_chars: int | None = None
+) -> str:
+    """Assemble the user prompt: the task + tiered research evidence + provided documents.
+
+    ``evidence_budget_chars`` caps the total characters of *raw* research excerpts so the assembled
+    prompt fits the model's context window (see :func:`synthesize`). ``None`` keeps every source
+    (the historical behavior). Sources are added highest-tier-first until the budget is spent; any
+    left out are summarized as a one-line omission note (their distilled claims still reach the
+    model via the findings digest and the deterministic bibliography, so nothing is silently lost).
+    """
     intent = synthesis_input.intent
     lines = [f"TASK ({intent.task_type.value}): {intent.summary or '(see evidence below)'}"]
 
@@ -82,7 +112,7 @@ def build_user_prompt(synthesis_input: SynthesisInput) -> str:
         lines.append(
             "\nVALIDATED FINDINGS (from the research team — claim · confidence · date · source; "
             "lead with these and respect their confidence levels):\n"
-            + synthesis_input.findings_digest.strip()
+            + synthesis_input.findings_digest.strip()[:_MAX_FINDINGS_DIGEST_CHARS]
         )
 
     if synthesis_input.prior_findings.strip():
@@ -97,12 +127,7 @@ def build_user_prompt(synthesis_input: SynthesisInput) -> str:
             lines.append(f"[D{idx}] {doc.source_path.name} ({doc.doc_type}):\n{excerpt}")
 
     if synthesis_input.research:
-        lines.append(f"\nRESEARCH EVIDENCE ({len(synthesis_input.research)} sources):")
-        for idx, content in enumerate(synthesis_input.research, start=1):
-            tier = classify_tier(content.url).value
-            title = f" — {content.title}" if content.title else ""
-            excerpt = content.text.strip()[:_MAX_SOURCE_CHARS]
-            lines.append(f"[{idx}] {content.url}{title} [{tier}]\n{excerpt}")
+        lines.append(_render_evidence(synthesis_input.research, evidence_budget_chars))
 
     if not synthesis_input.research and not synthesis_input.documents:
         lines.append(
@@ -112,6 +137,44 @@ def build_user_prompt(synthesis_input: SynthesisInput) -> str:
 
     lines.append("\nProduce the analysis as the specified JSON now.")
     return "\n".join(lines)
+
+
+def _render_evidence(research: list[FetchedContent], budget_chars: int | None) -> str:
+    """Render the RESEARCH EVIDENCE block, honoring a total character budget (tier-1 sources first).
+
+    ``research`` is the list of fetched pages (``FetchedContent``). When ``budget_chars`` is set,
+    sources are taken in tier order until adding the next would exceed it; the rest are noted as
+    omitted so the model knows the evidence set was trimmed (not absent).
+    """
+    ordered = sorted(
+        range(len(research)), key=lambda i: classify_tier(research[i].url).value
+    )
+    total = len(research)
+    blocks: list[str] = []
+    used = 0
+    shown = 0
+    for rank, src_idx in enumerate(ordered, start=1):
+        content = research[src_idx]
+        excerpt = content.text.strip()[:_MAX_SOURCE_CHARS]
+        if budget_chars is not None and shown >= 1 and (
+            shown >= _MAX_EVIDENCE_SOURCES
+            or used + len(excerpt) > max(budget_chars, _MIN_EVIDENCE_CHARS)
+        ):
+            break
+        tier = classify_tier(content.url).value
+        title = f" — {content.title}" if content.title else ""
+        blocks.append(f"[{rank}] {content.url}{title} [{tier}]\n{excerpt}")
+        used += len(excerpt)
+        shown += 1
+    header = f"\nRESEARCH EVIDENCE ({total} sources"
+    header += f", top {shown} shown to fit the context window):" if shown < total else "):"
+    omitted = (
+        f"\n[+{total - shown} further sources omitted for length — their claims are in the "
+        "validated findings and the bibliography.]"
+        if shown < total
+        else ""
+    )
+    return header + "\n" + "\n".join(blocks) + omitted
 
 
 # ------------------------------------------------------------------- coercion helpers
@@ -294,6 +357,31 @@ def parse_analysis(response: str, synthesis_input: SynthesisInput) -> AnalysisOu
     return _build_analysis(data, synthesis_input)
 
 
+def build_budgeted_user_prompt(
+    client: LocalLLMClient,
+    synthesis_input: SynthesisInput,
+    system: str,
+    extra_chars: int = 0,
+) -> str:
+    """Build the user prompt sized so ``system + user`` fits the model's context window.
+
+    Reserves room for the model's own answer, charges the fixed prompt parts (task, guidance,
+    validated findings, documents) — plus any ``extra_chars`` the caller appends downstream (the
+    revision loop adds the prior draft + the reviewer's issues) — and hands whatever character
+    budget is left to the raw research excerpts. This is what keeps an ultra run, which reads dozens
+    of pages, from blowing past ``num_ctx`` (the ``n_keep > n_ctx`` 400 the board deck failed on).
+
+    Shared by :func:`synthesize` and ``core.critic.revise`` so both honor one context budget.
+    """
+    max_prompt_chars = int((client.num_ctx - _OUTPUT_RESERVE_TOKENS) * _CHARS_PER_TOKEN)
+    # Cost of everything except the raw evidence (build it with a zero evidence budget to measure).
+    fixed = build_user_prompt(synthesis_input, evidence_budget_chars=0)
+    evidence_budget = max(
+        _MIN_EVIDENCE_CHARS, max_prompt_chars - len(system) - len(fixed) - max(0, extra_chars)
+    )
+    return build_user_prompt(synthesis_input, evidence_budget_chars=evidence_budget)
+
+
 def synthesize(client: LocalLLMClient, synthesis_input: SynthesisInput) -> AnalysisOutput:
     """Reason over the evidence with playbooks + brain and return a structured analysis.
 
@@ -308,7 +396,7 @@ def synthesize(client: LocalLLMClient, synthesis_input: SynthesisInput) -> Analy
     intent = synthesis_input.intent
     playbooks = load_playbooks()
     system = build_system_prompt(intent, synthesis_input.brain_context, playbooks)
-    user = build_user_prompt(synthesis_input)
+    user = build_budgeted_user_prompt(client, synthesis_input, system)
     use_thinking = intent.depth in {Depth.STANDARD, Depth.DEEP}
 
     try:

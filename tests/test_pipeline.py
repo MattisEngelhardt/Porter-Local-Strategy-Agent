@@ -40,6 +40,8 @@ _PASS_CRITIQUE = '{"score": 90, "criteria": [], "issues": [], "summary": "Strong
 class _ScriptedClient:
     """Returns a canned response chosen by which stage's system prompt is in use."""
 
+    num_ctx = 32768
+
     def __init__(
         self,
         *,

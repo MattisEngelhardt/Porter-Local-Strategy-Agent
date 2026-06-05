@@ -31,6 +31,8 @@ from models.task import Depth, Intent, Language, OutputFormat, TaskType
 class _CaptureClient:
     """Records generate() kwargs and returns a fixed response."""
 
+    num_ctx = 32768
+
     def __init__(self, response: str) -> None:
         self.response = response
         self.calls: list[dict[str, Any]] = []
@@ -41,6 +43,8 @@ class _CaptureClient:
 
 
 class _RaiseClient:
+    num_ctx = 32768
+
     def generate(self, prompt: str, **kw: Any) -> str:
         raise LLMError("backend down")
 
@@ -100,6 +104,34 @@ def test_build_user_prompt_includes_evidence_with_tier() -> None:
 def test_build_user_prompt_flags_no_evidence() -> None:
     """With no research or documents, the prompt flags the data gap."""
     assert "data gap" in build_user_prompt(_si())
+
+
+def test_build_user_prompt_caps_evidence_to_budget() -> None:
+    """A tight char budget keeps the top sources, omits the rest, and notes the omission."""
+    research = [
+        FetchedContent(url=f"https://example.com/{i}", title=f"S{i}", text="word " * 500)
+        for i in range(20)
+    ]
+    si = _si(research=research)
+    full = build_user_prompt(si)  # no budget → every source present
+    budgeted = build_user_prompt(si, evidence_budget_chars=4000)
+    assert len(budgeted) < len(full)
+    assert "omitted for length" in budgeted
+    assert "https://example.com/0" in budgeted  # at least the top source survives
+
+
+def test_synthesize_respects_context_window() -> None:
+    """synthesize() sizes the prompt to the client's num_ctx (no n_keep > n_ctx overflow)."""
+    research = [
+        FetchedContent(url=f"https://example.com/{i}", title=f"S{i}", text="word " * 600)
+        for i in range(40)
+    ]
+    client = _CaptureClient(json.dumps({"title": "T", "bottom_line": "B", "sections": []}))
+    synthesize(client, _si(research=research))  # type: ignore[arg-type]
+    call = client.calls[0]
+    # Conservative chars/token: the whole prompt must fit the window with output headroom.
+    budget_chars = client.num_ctx * 3.2
+    assert len(call["system"]) + len(call["prompt"]) < budget_chars
 
 
 # -------------------------------------------------------------- synthesize

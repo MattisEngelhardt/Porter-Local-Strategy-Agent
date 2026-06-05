@@ -14,6 +14,8 @@ from models.task import Intent, Language, OutputFormat, TaskType
 class _Client:
     """Returns a fixed response and records generate() kwargs."""
 
+    num_ctx = 32768
+
     def __init__(self, response: str) -> None:
         self.response = response
         self.calls: list[dict[str, Any]] = []
@@ -24,6 +26,8 @@ class _Client:
 
 
 class _RaiseClient:
+    num_ctx = 32768
+
     def generate(self, prompt: str, **kw: Any) -> str:
         raise LLMError("backend down")
 

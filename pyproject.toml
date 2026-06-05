@@ -38,6 +38,8 @@ module = [
     "pandas",
     "pptx",
     "pptx.*",
+    "fontTools",
+    "fontTools.*",
     "lxml",
     "lxml.*",
     "matplotlib",
