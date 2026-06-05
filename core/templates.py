@@ -147,6 +147,27 @@ def _content_cards(b: Build) -> list[PlacedBlock]:
     return out
 
 
+def _color_cards(b: Build) -> list[PlacedBlock]:
+    """Saturated 'Selected Work' color cards — reimagined + un-numbered-feel, used sparingly."""
+    s = layout.scaffold("content_stack")
+    out = [PlacedBlock("headline", s["headline"], {"text": b.headline, "accent": b.accent})]
+    region = s["body"]
+    if b.body:
+        callout, rest = region.slice_top(1.18, gap=0.22)
+        out.append(PlacedBlock("callout", callout, {"text": b.body, "fill": b.accent}))
+        region = rest
+    items = [x for x in b.bullets if str(x).strip()][:4]
+    if items:
+        out.append(
+            PlacedBlock(
+                "cards", region, {"items": items, "style": "color", "accent_start": b.accent_index}
+            )
+        )
+    else:
+        out.append(PlacedBlock("bullets", region, {"items": b.bullets}))
+    return out
+
+
 def _metric_hero(b: Build) -> list[PlacedBlock]:
     """One–three giant grounded numerals over a supporting clause (executive summary / metrics)."""
     metrics = _metrics(b.bullets)[:3]
@@ -434,6 +455,7 @@ def _today_iso() -> str:
 # ----------------------------------------------------------------- registry
 TEMPLATES: dict[str, Builder] = {
     "content_cards": _content_cards,
+    "color_cards": _color_cards,
     "metric_hero": _metric_hero,
     "editorial_split": _editorial_split,
     "image_profile": _image_profile,

@@ -58,6 +58,29 @@ class SlideComposition:
 
 _MAX_BLOCKS = 8
 
+# An explicit (non-AUTO) ``SlideContent.archetype`` hint (a high-effort LLM may emit one) maps onto a
+# template, overriding the slide-type matrix — the hint stays meaningful in the composable engine.
+_ARCH_TEMPLATE: dict[Archetype, str] = {
+    Archetype.STATEMENT: "statement",
+    Archetype.QUOTE: "quote",
+    Archetype.METRIC_HERO: "metric_hero",
+    Archetype.COLORBLOCK_GRID: "color_cards",
+    Archetype.EDITORIAL_SPLIT: "editorial_split",
+    Archetype.TABLE: "comparison_table",
+    Archetype.MATRIX: "swot_matrix",
+    Archetype.CHART: "data_chart",
+    Archetype.CONTENT: "content_cards",
+}
+# Expressive hints collapse to the calm card layout under ``restrained`` (board-safe), mirroring
+# ``deck_director``'s intensity behavior so the toggle stays meaningful.
+_EXPRESSIVE_ARCH = {
+    Archetype.STATEMENT,
+    Archetype.QUOTE,
+    Archetype.COLORBLOCK_GRID,
+    Archetype.METRIC_HERO,
+    Archetype.EDITORIAL_SPLIT,
+}
+
 
 # ----------------------------------------------------------------- accent + shape helpers
 def _accent_for(sc: SlideContent, colors: ColorsConfig) -> str:
@@ -119,6 +142,13 @@ def _select_template(
         return "cover_photo"
     if st == SlideType.APPENDIX:
         return "bibliography"
+    # An explicit archetype hint overrides the matrix (collapsing the expressive ones if restrained).
+    if sc.archetype != Archetype.AUTO:
+        if not ctx.editorial and sc.archetype in _EXPRESSIVE_ARCH:
+            return "content_cards"
+        mapped = _ARCH_TEMPLATE.get(sc.archetype)
+        if mapped is not None:
+            return mapped
     if st == SlideType.RECOMMENDATION:
         return "decision"
     if st == SlideType.SWOT:

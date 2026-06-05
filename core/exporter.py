@@ -30,7 +30,18 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
-from core import charts_image, deck_director, design, font_embed, imagery, layout, visuals
+from core import (
+    blocks,
+    charts_image,
+    composer,
+    deck_director,
+    design,
+    font_embed,
+    imagery,
+    layout,
+    templates,
+    visuals,
+)
 from core.artifact_framework import (
     brief_frame_context,
     deck_frame_label,
@@ -800,7 +811,6 @@ class _DeckRenderer:
         RECOMMENDATION slide becomes the dramatic dark divider. Sets the per-slide foreground color
         so headlines/labels stay legible on whichever canvas is used.
         """
-        inches = self._Inches
         self._slide_no += 1
         if canvas_hex is None:
             canvas = (
@@ -810,24 +820,32 @@ class _DeckRenderer:
             )
         else:
             canvas = canvas_hex
+        self._paint_solid_or_dark(slide, canvas)
+        self._frame_chrome(slide, sc, number=self._slide_no)
+
+    def _paint_solid_or_dark(self, slide: Any, canvas: str) -> None:
+        """Paint a content canvas (solid light, or the luminous dark) + set the per-slide fg."""
         on_dark = design.luminance(canvas) < 0.55
         self._slide_on_dark = on_dark
         self._slide_fg = design.contrast_text(canvas, self.colors)
-        muted = self.colors.light_surface if on_dark else self.colors.charcoal
         if on_dark:
             self._paint_dark_canvas(slide, glow=True)
         else:
             background = slide.background
             background.fill.solid()
             background.fill.fore_color.rgb = self.rgb(canvas)
+
+    def _frame_chrome(self, slide: Any, sc: SlideContent, *, number: int) -> None:
+        """Draw the editorial chrome (spine · footer rule · label · page no · telemetry · logo).
+
+        Canvas-agnostic: it reads ``self._slide_on_dark`` (set by whatever painted the background),
+        so both the legacy ``_frame`` and the Block-2 composition path share one chrome.
+        """
+        inches = self._Inches
+        muted = self.colors.light_surface if self._slide_on_dark else self.colors.charcoal
         accent = self._accent(sc.slide_type)
         self._rect(
-            slide,
-            inches(0),
-            inches(0),
-            inches(0.16),
-            inches(_SLIDE_H_IN),
-            self.colors.canvas_dark,
+            slide, inches(0), inches(0), inches(0.16), inches(_SLIDE_H_IN), self.colors.canvas_dark
         )
         self._rect(slide, inches(0.16), inches(0), inches(0.045), inches(_SLIDE_H_IN), accent)
         self._rect(slide, inches(0.65), inches(6.93), inches(10.9), inches(0.012), muted)
@@ -848,7 +866,7 @@ class _DeckRenderer:
         # collide — the v3 output stacked the logo on top of the page number).
         self._text(
             slide,
-            f"{self._slide_no:02d}",
+            f"{number:02d}",
             inches(0.65),
             inches(6.98),
             inches(0.5),
@@ -2302,14 +2320,21 @@ class _DeckRenderer:
         else:
             self._signal_cards(slide, sc.bullets, top=top)
 
-    def render(self, sc: SlideContent, plan: SlidePlan | None = None) -> None:
-        """Render a slide via its design-director :class:`SlidePlan` (archetype + canvas).
+    def render(
+        self,
+        sc: SlideContent,
+        plan: SlidePlan | None = None,
+        comp: composer.SlideComposition | None = None,
+    ) -> None:
+        """Render a slide: the Block-2 :class:`SlideComposition` first, the archetype path next.
 
-        The cover is always the dedicated dark title slide. Every other archetype is wrapped
-        fail-open: any rendering quirk degrades to ``_content_slide`` so the deck never loses a
-        slide (REQ-5). When ``plan`` is omitted (legacy callers), a calm CONTENT slide on the
-        default canvas is rendered — preserving the pre-director behavior.
+        When ``comp`` is supplied (the default from :func:`build_deck`) the composable library
+        paints the slide. ``_render_composition`` never raises (each block is fail-open), so the
+        only way to reach the legacy archetype path is a missing composition — preserving REQ-5's
+        ultimate fallback (and the pre-Block-2 behavior for callers that pass only a ``plan``).
         """
+        if comp is not None and self._render_composition(sc, comp):
+            return
         if sc.slide_type == SlideType.TITLE:
             self._title_slide(sc)
             return
@@ -2321,6 +2346,105 @@ class _DeckRenderer:
             self._render_archetype(plan.archetype, sc, canvas, plan.accent_index)
         except Exception:  # noqa: BLE001 — any archetype quirk degrades to content (REQ-5)
             self._content_slide(sc, canvas)
+
+    # --- Block 2: render a composer SlideComposition -------------------------------------
+    def _render_composition(self, sc: SlideContent, comp: composer.SlideComposition) -> bool:
+        """Paint a :class:`~core.composer.SlideComposition`; False only if no slide was made.
+
+        Self-contained and fail-open: the canvas, chrome and every block are individually guarded,
+        so this never raises — a partial block failure still yields a clean slide with its headline
+        rather than handing back to the archetype path (which would add a duplicate slide).
+        """
+        try:
+            slide = self._new()
+        except Exception:  # noqa: BLE001 — pptx could not add a slide; let the caller fall back
+            return False
+        self._slide_no = comp.position
+        try:
+            self._paint_composition_canvas(slide, comp.canvas)
+        except Exception:  # noqa: BLE001 — degrade to a clean cream canvas (REQ-5)
+            self._paint_solid_or_dark(slide, self.colors.paper)
+        if comp.chrome:
+            try:
+                self._frame_chrome(slide, sc, number=comp.position)
+            except Exception:  # noqa: BLE001 — chrome is decorative; never lose the slide
+                pass
+        else:
+            self._add_logo(slide)
+        theme = self._block_theme(comp)
+        for placed in comp.blocks:
+            if placed.kind == "chart":
+                self._render_chart_block(slide, placed.region, placed.params)
+                continue
+            blocks.render(placed.kind, self, slide, placed.region, placed.params, theme)
+        return True
+
+    def _paint_composition_canvas(self, slide: Any, canvas: templates.CanvasSpec) -> None:
+        """Paint a composition's canvas (image / dark / field / solid) + set the per-slide fg."""
+        if canvas.role == "image" and canvas.image_path:
+            self._slide_on_dark = True
+            self._slide_fg = design.contrast_text(self.colors.canvas_dark, self.colors)
+            self._paint_cover_image(slide, canvas.image_path)
+        elif canvas.role == "dark":
+            self._slide_on_dark = True
+            self._slide_fg = design.contrast_text(self.colors.canvas_dark, self.colors)
+            self._paint_dark_canvas(slide, glow=canvas.glow)
+        elif canvas.role == "field" and canvas.field_hex:
+            self._paint_field(slide, canvas.field_hex)  # sets fg/on_dark itself
+        else:
+            background = slide.background
+            background.fill.solid()
+            background.fill.fore_color.rgb = self.rgb(canvas.fill)
+            self._slide_on_dark = canvas.on_dark
+            self._slide_fg = design.contrast_text(canvas.fill, self.colors)
+
+    def _block_theme(self, comp: composer.SlideComposition) -> blocks.BlockTheme:
+        """Build the canvas-derived :class:`~core.blocks.BlockTheme` handed to every block."""
+        canvas = comp.canvas
+        base = canvas.field_hex or (self.colors.canvas_dark if self._slide_on_dark else canvas.fill)
+        muted = self.colors.light_surface if self._slide_on_dark else self.colors.charcoal
+        return blocks.BlockTheme(
+            colors=self.colors,
+            fonts=self.fonts,
+            editorial=self._editorial,
+            fg=self._slide_fg,
+            on_dark=self._slide_on_dark,
+            spot=design.spot_for_canvas(base, self.colors),
+            muted=muted,
+            accent=comp.accent,
+        )
+
+    def _render_chart_block(self, slide: Any, region: layout.Region, params: Any) -> None:
+        """Render a composition chart block, enforcing the per-deck chart budget (fail-open)."""
+        spec = params.get("spec")
+        if not isinstance(spec, ChartSpec) or not self.style.charts_enabled:
+            return
+        if self._charts_used >= self._max_charts:
+            return
+        height = min(region.height, 3.9)
+        ok = charts_image.add_image_chart(
+            slide,
+            spec,
+            self.colors,
+            self.style,
+            left_in=region.left,
+            top_in=region.top,
+            width_in=region.width,
+            height_in=height,
+            on_dark=self._slide_on_dark,
+        )
+        if not ok:
+            ok = visuals.add_native_chart(
+                slide,
+                spec,
+                self.colors,
+                left_in=region.left,
+                top_in=region.top,
+                width_in=region.width,
+                height_in=height,
+            )
+        if ok:
+            self._charts_used += 1
 
     def _render_archetype(
         self, archetype: Archetype, sc: SlideContent, canvas: str, accent_index: int
@@ -2386,9 +2510,18 @@ def build_deck(
     """
     deck = prepare_deck_for_render(deck, analysis)
     renderer = _DeckRenderer(config, deck.language, research_report)
-    plans = deck_director.plan_deck(deck.slides, editorial=design.is_editorial(config.output.style))
-    for slide, plan in zip(deck.slides, plans, strict=True):
-        renderer.render(slide, plan)
+    editorial = design.is_editorial(config.output.style)
+    ctx = composer.DeckContext(
+        colors=config.output.colors,
+        style=config.output.style,
+        language=deck.language,
+        editorial=editorial,
+        imagery_dir=config.output.imagery_dir,
+    )
+    comps = composer.compose_deck(deck.slides, ctx)
+    plans = deck_director.plan_deck(deck.slides, editorial=editorial)  # ultimate-fallback path
+    for slide, plan, comp in zip(deck.slides, plans, comps, strict=True):
+        renderer.render(slide, plan, comp)
     return renderer.save(output_dir, deck.title)
 
 
