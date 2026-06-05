@@ -30,7 +30,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from markupsafe import Markup, escape
 
-from core import charts_image, deck_director, design, font_embed, imagery, visuals
+from core import charts_image, deck_director, design, font_embed, imagery, layout, visuals
 from core.artifact_framework import (
     brief_frame_context,
     deck_frame_label,
@@ -541,7 +541,9 @@ class _DeckRenderer:
         self.language = language
         self.research_report = research_report
         self._editorial = design.is_editorial(self.style)
+        self.editorial = self._editorial  # public alias for the Surface protocol (core/blocks)
         fonts = design.deck_fonts(self.style)
+        self.fonts = fonts  # role → family, consumed by core/blocks via the Surface protocol
         self._font_display = fonts["display"]
         self._font_body = fonts["body"]
         self._font_mono = fonts["mono"]
@@ -1399,6 +1401,233 @@ class _DeckRenderer:
             font=self._font_body,
         )
         body.text_frame.auto_size = self._MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+
+    # === Block 2: inch-based surface primitives (consumed by core/blocks via ``Surface``) =====
+    def _align(self, name: str) -> Any:
+        """Map an alignment name to the pptx enum (blocks pass strings, never pptx enums)."""
+        return {
+            "left": self._PP_ALIGN.LEFT,
+            "center": self._PP_ALIGN.CENTER,
+            "right": self._PP_ALIGN.RIGHT,
+        }.get(name, self._PP_ALIGN.LEFT)
+
+    def _anchor_of(self, name: str | None) -> Any:
+        """Map a vertical-anchor name to the pptx enum (or ``None`` to leave it unset)."""
+        if name is None:
+            return None
+        return {
+            "top": self._MSO_ANCHOR.TOP,
+            "middle": self._MSO_ANCHOR.MIDDLE,
+            "bottom": self._MSO_ANCHOR.BOTTOM,
+        }.get(name)
+
+    def fill_region(
+        self,
+        slide: Any,
+        region: layout.Region,
+        fill: str,
+        *,
+        rounded: bool = False,
+        line: str | None = None,
+        shadow: bool = False,
+    ) -> Any:
+        """Draw a (rounded) rectangle filling ``region``; optional soft shadow (editorial)."""
+        inches = self._Inches
+        draw = self._rounded if rounded else self._rect
+        shape = draw(
+            slide,
+            inches(region.left),
+            inches(region.top),
+            inches(region.width),
+            inches(region.height),
+            fill,
+            line=line,
+        )
+        if shadow:
+            self._soft_shadow(shape)
+        return shape
+
+    def text_region(
+        self,
+        slide: Any,
+        region: layout.Region,
+        text: str,
+        *,
+        size: float,
+        color: str,
+        font: str | None = None,
+        bold: bool = False,
+        italic: bool = False,
+        align: str = "left",
+        anchor: str | None = None,
+        autofit: bool = False,
+        wrap: bool = True,
+    ) -> Any:
+        """A single-paragraph text box placed in ``region`` (inch-based; used by blocks)."""
+        inches = self._Inches
+        box = slide.shapes.add_textbox(
+            inches(region.left), inches(region.top), inches(region.width), inches(region.height)
+        )
+        frame = box.text_frame
+        frame.word_wrap = wrap
+        anc = self._anchor_of(anchor)
+        if anc is not None:
+            frame.vertical_anchor = anc
+        para = frame.paragraphs[0]
+        para.text = text
+        para.alignment = self._align(align)
+        run = para.runs[0] if para.runs else para.add_run()
+        run.font.size = self._Pt(size)
+        run.font.bold = bold
+        run.font.italic = italic
+        run.font.name = font or (self._font_display if size >= 24 else self._font_body)
+        run.font.color.rgb = self.rgb(color)
+        if autofit:
+            frame.auto_size = self._MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+        return box
+
+    def runs_region(
+        self,
+        slide: Any,
+        region: layout.Region,
+        runs: Any,
+        *,
+        align: str = "left",
+        anchor: str | None = None,
+        wrap: bool = True,
+    ) -> Any:
+        """A multi-run text box (mixed face/weight/italic/color) placed in ``region``."""
+        inches = self._Inches
+        box = slide.shapes.add_textbox(
+            inches(region.left), inches(region.top), inches(region.width), inches(region.height)
+        )
+        frame = box.text_frame
+        frame.word_wrap = wrap
+        anc = self._anchor_of(anchor)
+        if anc is not None:
+            frame.vertical_anchor = anc
+        para = frame.paragraphs[0]
+        para.alignment = self._align(align)
+        for r in runs:
+            run = para.add_run()
+            run.text = r.text
+            run.font.size = self._Pt(r.size)
+            run.font.bold = r.bold
+            run.font.italic = r.italic
+            run.font.name = r.font
+            run.font.color.rgb = self.rgb(r.color)
+        return box
+
+    def image_region(
+        self,
+        slide: Any,
+        region: layout.Region,
+        path: str,
+        *,
+        cover: bool = True,
+        scrim_alpha: int | None = None,
+    ) -> bool:
+        """Place an image cover-fit (cropped, no stretch) into ``region``; optional dark scrim."""
+        inches = self._Inches
+        try:
+            pic = slide.shapes.add_picture(str(path), inches(region.left), inches(region.top))
+            if cover and pic.width and pic.height:
+                aspect = pic.width / pic.height
+                target = region.width / region.height
+                if aspect > target:
+                    crop = (1 - target / aspect) / 2
+                    pic.crop_left = crop
+                    pic.crop_right = crop
+                else:
+                    crop = (1 - aspect / target) / 2
+                    pic.crop_top = crop
+                    pic.crop_bottom = crop
+            pic.left = inches(region.left)
+            pic.top = inches(region.top)
+            pic.width = inches(region.width)
+            pic.height = inches(region.height)
+            if scrim_alpha is not None:
+                scrim = self._rect(
+                    slide,
+                    inches(region.left),
+                    inches(region.top),
+                    inches(region.width),
+                    inches(region.height),
+                    self.colors.canvas_dark,
+                )
+                scrim.shadow.inherit = False
+                self._set_alpha(scrim, scrim_alpha)
+            return True
+        except Exception:  # noqa: BLE001 — a bad image never breaks a slide (REQ-5)
+            return False
+
+    def gradient(self, shape: Any, stops: list[tuple[float, str]]) -> None:
+        """Public alias: replace ``shape``'s fill with a multi-stop gradient (depth)."""
+        self._apply_gradient(shape, stops)
+
+    def set_alpha(self, shape: Any, pct: int) -> None:
+        """Public alias: set a solid-filled shape's opacity (0..100)."""
+        self._set_alpha(shape, pct)
+
+    def soft_shadow(self, shape: Any) -> None:
+        """Public alias: add the editorial soft outer shadow (fail-open)."""
+        self._soft_shadow(shape)
+
+    def card_system(
+        self,
+        slide: Any,
+        line: str,
+        *,
+        left: float,
+        y: float,
+        width: float,
+        height: float,
+        accent: str,
+        index: int,
+    ) -> None:
+        """Public alias for the white system card (accent spine, metric/index, arrow, tag)."""
+        self._system_card(
+            slide, line, left=left, y=y, width=width, height=height, accent=accent, index=index
+        )
+
+    def card_color(
+        self,
+        slide: Any,
+        line: str,
+        *,
+        left: float,
+        y: float,
+        width: float,
+        height: float,
+        field: str,
+        index: int,
+    ) -> None:
+        """Public alias for the saturated color-block card (knockout numeral, body, arrow)."""
+        self._color_card(
+            slide, line, left=left, y=y, width=width, height=height, field=field, index=index
+        )
+
+    def big_number(
+        self,
+        slide: Any,
+        token: str,
+        label: str,
+        *,
+        left: float,
+        top: float,
+        width: float,
+        color: str,
+    ) -> None:
+        """Public alias for the hero numeral + label."""
+        self._big_number(slide, token, label, left=left, top=top, width=width, color=color)
+
+    def short(self, text: str, limit: int = 165) -> str:
+        """Public alias for sentence/word-boundary truncation (the 4B-safety trim)."""
+        return self._short(text, limit)
+
+    def metric_token(self, text: str) -> str | None:
+        """Public alias for the visible-number-token extractor."""
+        return self._metric_token(text)
 
     def _new(self) -> Any:
         """Append a blank slide."""

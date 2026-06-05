@@ -33,6 +33,7 @@ _DESIGN_MODULES = [
     "core/visual_selector.py",
     "core/diagrams.py",
     "core/layout.py",
+    "core/blocks.py",
 ]
 
 
