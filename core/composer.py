@@ -58,8 +58,8 @@ class SlideComposition:
 
 _MAX_BLOCKS = 8
 
-# An explicit (non-AUTO) ``SlideContent.archetype`` hint (a high-effort LLM may emit one) maps onto a
-# template, overriding the slide-type matrix — the hint stays meaningful in the composable engine.
+# An explicit (non-AUTO) ``SlideContent.archetype`` hint (a high-effort LLM may emit one) maps onto
+# a template, overriding the slide-type matrix — the hint stays meaningful in the composable engine.
 _ARCH_TEMPLATE: dict[Archetype, str] = {
     Archetype.STATEMENT: "statement",
     Archetype.QUOTE: "quote",
@@ -142,7 +142,7 @@ def _select_template(
         return "cover_photo"
     if st == SlideType.APPENDIX:
         return "bibliography"
-    # An explicit archetype hint overrides the matrix (collapsing the expressive ones if restrained).
+    # An explicit archetype hint overrides the matrix (collapsing expressive ones if restrained).
     if sc.archetype != Archetype.AUTO:
         if not ctx.editorial and sc.archetype in _EXPRESSIVE_ARCH:
             return "content_cards"

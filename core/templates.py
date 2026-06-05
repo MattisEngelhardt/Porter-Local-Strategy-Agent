@@ -77,12 +77,17 @@ Builder = Callable[[Build], list[PlacedBlock]]
 
 # ----------------------------------------------------------------- helpers
 def _metrics(bullets: list[str]) -> list[tuple[str, str]]:
-    """(token, line) pairs for bullets that carry a number — drives the metric hero."""
+    """(token, line) pairs for bullets with a number — drives the metric hero.
+
+    The hero token is trimmed to a *compact* numeral so a 92pt big-number never wraps: a trailing
+    word-unit is dropped (``"12 months"`` → ``"12"``) while an attached symbol stays (``"675m"``,
+    ``"$55M"``, ``"40%"``). The full clause is kept as the supporting label beneath the numeral.
+    """
     out: list[tuple[str, str]] = []
     for line in bullets:
-        token = design.split_for_highlight(line)[1]
+        token = design.split_for_highlight(line)[1].strip()
         if token and any(ch.isdigit() for ch in token):
-            out.append((token.strip()[:12], line))
+            out.append((token.split()[0][:7], line))
     return out
 
 
