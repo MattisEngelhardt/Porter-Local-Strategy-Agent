@@ -12,7 +12,7 @@ from core import templates
 from core.composer import DeckContext, SlideComposition, compose, compose_deck
 from core.config import AppConfig
 from core.templates import FULL_BLEED
-from models.deck import SlideContent, SlideType
+from models.deck import SlideContent, SlideRecipe, SlideType
 from models.task import Language
 from models.visuals import ChartSeries, ChartSpec, ChartType
 
@@ -193,3 +193,54 @@ def test_template_registry_is_self_consistent() -> None:
     assert FULL_BLEED <= templates.TEMPLATE_IDS
     for name in templates.template_names():
         assert name in templates.TEMPLATE_IDS
+
+
+# ----------------------------------------------------------------- hybrid recipe (2.6)
+def _table_slide() -> SlideContent:
+    return SlideContent(
+        slide_type=SlideType.COMPETITIVE_COMPARISON,
+        headline="Head to head",
+        table=[["Metric", "Neura", "Rival"], ["Funding", "120", "675"]],
+    )
+
+
+def test_recipe_absent_is_byte_identical_to_an_all_none_recipe(tmp_path: Path) -> None:
+    """A recipe with no applicable field leaves the composition untouched (byte-identical floor)."""
+    ctx = _ctx(tmp_path)
+    base = _table_slide()
+    withrecipe = base.model_copy(update={"recipe": SlideRecipe()})
+    assert compose(base, ctx) == compose(withrecipe, ctx)
+
+
+def test_recipe_forces_a_whitelisted_template(tmp_path: Path) -> None:
+    sc = SlideContent(
+        slide_type=SlideType.MARKET_LANDSCAPE,
+        headline="A single thought",
+        body="One reflective paragraph.",
+        recipe=SlideRecipe(template="statement"),
+    )
+    comp = compose(sc, _ctx(tmp_path))
+    assert comp.template == "statement" and comp.chrome is False
+
+
+def test_recipe_unknown_template_is_ignored(tmp_path: Path) -> None:
+    sc = _table_slide().model_copy(update={"recipe": SlideRecipe(template="does_not_exist")})
+    comp = compose(sc, _ctx(tmp_path))
+    assert comp.template == "comparison_table"  # the matrix choice stands
+
+
+def test_recipe_overrides_table_style_and_emphasis(tmp_path: Path) -> None:
+    sc = _table_slide().model_copy(
+        update={"recipe": SlideRecipe(table_style="minimal", emphasis_col=1)}
+    )
+    comp = compose(sc, _ctx(tmp_path))
+    table = next(b for b in comp.blocks if b.kind == "table")
+    assert table.params["style"] == "minimal"
+    assert table.params["emphasis_col"] == 1
+
+
+def test_recipe_bad_style_value_is_ignored(tmp_path: Path) -> None:
+    sc = _table_slide().model_copy(update={"recipe": SlideRecipe(table_style="rainbow")})
+    comp = compose(sc, _ctx(tmp_path))
+    table = next(b for b in comp.blocks if b.kind == "table")
+    assert table.params["style"] == "compare"  # comparison_table's default, unchanged

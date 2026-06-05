@@ -173,3 +173,51 @@ on deck slides (`output.style.telemetry_chips=false` by default; opt-in still av
 leaked Markdown (`**`) stripped; bare ordinals ("Focus Area 1") are not promoted to hero numbers;
 generic label prefixes ("Recommendation:/Decision:") stripped; cards auto-fit (no overflow/tag
 collision); the logo is width-capped and clear of the page number (light variant on dark).
+
+## Editorial v5.0 — the composable deck library (Block 2)
+
+The deck is now **assembled from blocks placed into a layout scaffold**, not poured into one card
+helper — the fix for "every slide the same rounded `01/02/03` cards". A small local model only writes
+content; **100 % of design is deterministic code.** Additive + config-driven; `restrained` stays
+flat/board-safe; the architecture test forbids any design module from importing the LLM client, so
+swapping the model (4B → 12B → API) changes only *words*, never *design*.
+
+**Four pure layers + a composer.**
+- `core/layout.py` — a `Region` (inches) + a registry of named **scaffolds** (`full_bleed_hero`,
+  `editorial_split`, `image_text_split`, `sidebar`, `quadrant`, `three_panel`, `big_number_hero`,
+  `process_band`, `data_band`, `quote`, `decision`, `appendix_list`, `statement`, `content_stack`).
+  Pure geometry — this is where asymmetry / negative space live.
+- `core/blocks.py` — parameterized `render(kind, surface, slide, region, params, theme)` blocks over
+  the existing pptx primitives: a **multi-run headline** (serif/grotesk base + a recolored,
+  optionally serif-italic special word + a kicker-with-rule), kicker, body, callout, bullets, cards
+  (system / color), stat tiles, **flow** (connected step cards — rebuilt so long node text *wraps*
+  instead of hard-truncating), 2×2 matrix, chart, **table** (`editorial`/`minimal`/`emphasis`/
+  `compare` styles · N columns · emphasis column), pull-quote, image (cover-fit crop), metric hero,
+  panel, scrim band, source list, accent number, and the decision chip + actions. Every block is
+  fail-open.
+- `core/templates.py` — ~14 visibly **distinct presets**: the adaptive serif **photo cover** with a
+  text-safe band, the split **color-field + robot** cover, metric hero, editorial split, image
+  profile, data chart, comparison table, **process flow** (steps → flow, never a block grid), SWOT
+  **2×2**, statement/divider, quote, the restrained Neura **black/white decision** slide, the
+  paginated bibliography, and calm card / color-card fallbacks.
+- `core/composer.py` — `compose_deck(slides, ctx)` maps each slide → a template via the **slide-type
+  coverage matrix** (adapted to content shape), resolves canvas + accent from the deck-wide color
+  rhythm (`deck_director.plan_deck`), sanitizes content (markdown / label strip), and enforces a
+  **legibility guardrail** (a composition must carry a headline) with a per-type fallback. An
+  explicit `SlideContent.archetype` hint overrides the matrix (collapsing the expressive ones under
+  `restrained`).
+
+**The decision slide (the CEO payload).** `RECOMMENDATION` renders on a restrained Neura near-white
+canvas: a black verdict headline, a derived **Go / No-Go / Conditional** chip (matched from the
+content's own words — never invented), numbered concrete actions (owner/horizon kept), and the ask.
+Minimal ornament; reads in five seconds.
+
+**Hybrid recipe (`SlideContent.recipe`, optional).** A high-effort model *may* emit a typed
+`SlideRecipe` to fine-tune a slide — a whitelisted template id, a table style / emphasis column, a
+card style. The composer **validates/whitelists** every field (an unknown value is ignored, never
+raised) and it carries no content (RULE 14). With the recipe absent — the 4B default — the deck is
+**byte-identical** to the deterministic plan. It is a bonus, not a crutch.
+
+**Rendering.** `build_deck` composes every slide and paints it through the block library; the
+renderer keeps the prior archetype path as the **ultimate fallback** (REQ-5). The per-deck chart
+budget (`max_charts_per_deck`) is enforced in the render loop; charts remain grounded image-charts.

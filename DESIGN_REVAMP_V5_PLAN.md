@@ -316,23 +316,44 @@ via embed); ≥1 real labeled chart on a data slide; clean adaptive serif cover 
 title + dated filename; all source pages one style; decision slide restrained Neura b/w; no truncated
 fragments; Aivazovsky palette visible; `restrained` still flat. All gates green.
 
-## BLOCK 2 — Composable library, composer & templates (next session)
+## BLOCK 2 — Composable library, composer & templates ✅ (implemented 2026-06-05)
+
+> All gates green (`ruff` + `ruff format --check` + `mypy --strict core llm models main.py` = 48
+> files + full `pytest`). A 10-slide no-LLM golden deck was rendered and rasterized via PowerPoint
+> COM and eyeballed slide-by-slide (cover / metric hero / chart / image profile / comparison /
+> flow / SWOT / decision / bibliography). Full handoff at the top of `DESIGN_REVAMP_PROGRESS.md`.
 
 Builds on Block 1's primitives; delivers depth + variety.
 
-- **2.1 `core/layout.py`** — scaffold registry → named regions (`Region`; pure geometry, unit-tested).
-- **2.2 `core/blocks.py`** — parameterized blocks (table styles + N columns + emphasis col; bullet
-  treatments; stat tiles; **image block**; flow/matrix diagram blocks; pull-quote; source_list; accents).
-- **2.3 `core/composer.py`** — `compose(slide, deck_context) → SlideComposition`: the slide-type matrix +
-  data-shape→diagram selection + color rhythm + diversity + legibility guardrail + per-type fallback
-  (port/fix from `deck_director`). **Flow over block-grid; color cards only reimagined/un-numbered/sparing.**
-- **2.4 `core/templates.py`** — the ~8–10 distinct presets (incl. focal-point + split covers, statement/
-  divider, decision template).
-- **2.5 Wire** `_DeckRenderer.render` → render a `SlideComposition`, keeping the old path as the ultimate
-  fallback; reuse `_frame`/`_add_logo`/page numbers.
-- **2.6 Hybrid recipe + docs** — additive optional `SlideRecipe` on `SlideContent` (whitelisted/validated/
-  grounded; deck byte-identical when absent); one high-effort prompt hint. Update `design_playbook.md`
-  + `DESIGN_REVAMP_PROGRESS.md`.
+- ✅ **2.1 `core/layout.py`** — `Region` (inches, frozen) + pure split/grid/pad helpers + a registry
+  of 15 named scaffolds. `tests/test_layout.py` (in-bounds + non-overlap tiling). No pptx/color/LLM.
+- ✅ **2.2 `core/blocks.py`** — parameterized `render(kind, surface, slide, region, params, theme)`
+  over a structural `Surface` protocol the renderer satisfies (the renderer gained inch-based
+  primitives). Blocks: multi-run **headline** (serif/italic + recolored word + kicker-rule), kicker,
+  body, callout, bullets, cards (system/color), stat_tiles, **flow** (rebuilt — wraps long node text,
+  fixes the truncation), matrix, chart, **table** (editorial/minimal/emphasis/compare · N cols ·
+  emphasis col), pull_quote, image (cover-fit), metric, panel, scrim_band, source_list,
+  accent_number, decision_chip, decision_actions. `tests/test_blocks.py`.
+- ✅ **2.3 `core/composer.py`** — `compose`/`compose_deck → SlideComposition`: the slide-type coverage
+  matrix (content-shape-adapted) + color rhythm + diversity via `deck_director.plan_deck` + content
+  sanitization + legibility guardrail + per-type fallback. **Flow over block-grid; color cards only
+  via the explicit hint, sparing.** `tests/test_composer.py` (16).
+- ✅ **2.4 `core/templates.py`** — ~14 distinct presets (adaptive serif **photo cover** w/ text-safe
+  band, split **color-field + robot** cover, metric hero, editorial split, image profile, data chart,
+  comparison table, process flow, SWOT 2×2, statement, quote, restrained Neura **decision**,
+  bibliography, content/color cards). Defines `PlacedBlock`/`CanvasSpec`/`Build`.
+- ✅ **2.5 Wire** `_DeckRenderer.render(sc, plan, comp)` → renders the `SlideComposition` first, keeps
+  the archetype path as the ultimate fallback (REQ-5). `_frame` split into `_paint_solid_or_dark` +
+  `_frame_chrome`; budget-aware `_render_chart_block`. `build_deck` runs `compose_deck`.
+  `tests/test_composition_render.py` (4).
+- ✅ **2.6 Hybrid recipe + docs** — additive optional `SlideRecipe` on `SlideContent` (template /
+  table_style / emphasis_col / cards_style), whitelisted+validated in the composer; **deck
+  byte-identical when absent**; no content (RULE 14). `design_playbook.md` + `DESIGN_REVAMP_PROGRESS.md`
+  updated. *(The high-effort prompt hint that emits a recipe is the documented extension point — the
+  recipe is consumed if present; no LLM prompt was wired, to keep the change additive + risk-free.)*
+- ✅ **Folded-in Block-1 deferrals:** the richer **multi-run headline** (serif + italic + recolored
+  special word + kicker-with-rule) is the `headline` block; the **process-diagram truncation** is
+  fixed by the `flow` block (wraps/auto-fits instead of trimming to 7 words).
 
 ---
 

@@ -19,12 +19,13 @@ intensity collapses the expressive canvases via :func:`core.deck_director.plan_d
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from core import deck_director, design, imagery, templates
 from core.config import ColorsConfig, StyleConfig
 from core.deck_director import CanvasRole, SlidePlan
 from core.templates import Build, CanvasSpec, PlacedBlock
-from models.deck import Archetype, SlideContent, SlideType
+from models.deck import Archetype, SlideContent, SlideRecipe, SlideType
 from models.task import Language
 
 
@@ -223,6 +224,37 @@ def _build_image(ctx: DeckContext, template_id: str, seed: str) -> str | None:
     return None
 
 
+# ----------------------------------------------------------------- hybrid recipe (2.6)
+_RECIPE_TABLE_STYLES = {"editorial", "minimal", "emphasis", "compare"}
+_RECIPE_CARDS_STYLES = {"system", "color"}
+
+
+def _apply_recipe(placed: list[PlacedBlock], recipe: SlideRecipe) -> list[PlacedBlock]:
+    """Apply a validated/whitelisted recipe's style tweaks to a built composition (no-op if none).
+
+    Only whitelisted style fields touch a renderer (a table style / emphasis column / card style);
+    an unknown value is ignored. Blocks that change get a new ``PlacedBlock``; everything else is
+    returned unchanged, so a recipe with no applicable field leaves the composition untouched.
+    """
+    out: list[PlacedBlock] = []
+    for block in placed:
+        params = block.params
+        if block.kind == "table":
+            updates: dict[str, Any] = {}
+            if recipe.table_style in _RECIPE_TABLE_STYLES:
+                updates["style"] = recipe.table_style
+            if recipe.emphasis_col is not None and recipe.emphasis_col >= 0:
+                updates["emphasis_col"] = recipe.emphasis_col
+            if updates:
+                params = {**params, **updates}
+        elif block.kind == "cards" and recipe.cards_style in _RECIPE_CARDS_STYLES:
+            params = {**params, "style": recipe.cards_style}
+        out.append(
+            block if params is block.params else PlacedBlock(block.kind, block.region, params)
+        )
+    return out
+
+
 # ----------------------------------------------------------------- guardrail
 def _legible(placed: list[PlacedBlock]) -> bool:
     """Legible only if the composition carries a non-empty headline/quote and isn't overloaded."""
@@ -246,6 +278,9 @@ def compose(
     body = design.strip_inline_markdown(sc.body) if sc.body else None
 
     template_id = _select_template(sc, ctx, plan, bullets)
+    # Hybrid override: a recipe may force a *whitelisted* template (unknown ids ignored, 2.6).
+    if sc.recipe is not None and sc.recipe.template in templates.TEMPLATE_IDS:
+        template_id = sc.recipe.template or template_id
     canvas = _canvas_for(sc, template_id, ctx, plan)
     accent = _accent_for(sc, ctx.colors)
     build = Build(
@@ -268,6 +303,8 @@ def compose(
         template_id = "content_cards"
         canvas = _canvas_for(sc, template_id, ctx, plan)
         placed = templates.build(template_id, build)
+    if sc.recipe is not None:
+        placed = _apply_recipe(placed, sc.recipe)
     return SlideComposition(
         template=template_id,
         slide_type=sc.slide_type,

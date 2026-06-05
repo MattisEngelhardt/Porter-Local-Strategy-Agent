@@ -49,6 +49,22 @@ class Archetype(StrEnum):
     CONTENT = "content"  # universal fallback (cards)
 
 
+class SlideRecipe(BaseModel):
+    """Optional **hybrid override** (Block 2.6): whitelisted style tweaks a high-effort model emits.
+
+    Every field defaults to ``None`` and is additive + non-destructive, so a deck with no recipe
+    (the 4B default) renders **byte-identical** to the deterministic composer plan. The composer
+    validates/whitelists each field before it can reach a renderer — an unknown template/style is
+    ignored, never raised — and nothing here introduces *content* (RULE 14): these are layout/style
+    choices only. The recipe is a bonus, not a crutch; with it absent the deck is already complete.
+    """
+
+    template: str | None = None  # force a whitelisted composer template id (else ignored)
+    table_style: str | None = None  # table style: editorial | minimal | emphasis | compare
+    emphasis_col: int | None = None  # emphasis column index for a table block
+    cards_style: str | None = None  # card treatment: system | color
+
+
 class SlideContent(BaseModel):
     """Content for a single slide. ``headline`` is the 'so what', never a topic label."""
 
@@ -62,6 +78,7 @@ class SlideContent(BaseModel):
     diagram: DiagramSpec | None = None  # optional native schematic (Schaubild) for this slide
     archetype: Archetype = Archetype.AUTO  # AUTO → director decides; a high-effort LLM may hint
     emphasis: str | None = None  # optional coarse layout hint (whitelisted; ignored if unknown)
+    recipe: SlideRecipe | None = None  # optional hybrid override (Block 2.6); None → deterministic
 
 
 class DeckStructure(BaseModel):
