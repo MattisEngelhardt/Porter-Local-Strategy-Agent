@@ -34,6 +34,8 @@ _DESIGN_MODULES = [
     "core/diagrams.py",
     "core/layout.py",
     "core/blocks.py",
+    "core/templates.py",
+    "core/composer.py",
 ]
 
 

@@ -716,6 +716,44 @@ def _image(
     )
 
 
+def _metric(
+    surface: Surface, slide: Any, region: Region, params: Mapping[str, Any], theme: BlockTheme
+) -> None:
+    """One giant grounded numeral with a supporting label beneath it (metric hero)."""
+    token = str(params.get("token", "")).strip()
+    if not token:
+        return
+    surface.big_number(
+        slide,
+        token,
+        str(params.get("label", "")),
+        left=region.left,
+        top=region.top,
+        width=region.width,
+        color=str(params.get("color", theme.spot)),
+    )
+
+
+def _panel(
+    surface: Surface, slide: Any, region: Region, params: Mapping[str, Any], theme: BlockTheme
+) -> None:
+    """A solid (or gradient) color field panel — a daring single-color block / split field."""
+    fill = str(params.get("fill", theme.colors.canvas_dark))
+    shape = surface.fill_region(slide, region, fill, rounded=bool(params.get("rounded", False)))
+    stops = params.get("gradient")
+    if stops:
+        surface.gradient(shape, list(stops))
+
+
+def _scrim_band(
+    surface: Surface, slide: Any, region: Region, params: Mapping[str, Any], theme: BlockTheme
+) -> None:
+    """A translucent dark band behind cover text — the guaranteed text-safe zone over a photo."""
+    fill = str(params.get("fill", theme.colors.canvas_dark))
+    shape = surface.fill_region(slide, region, fill)
+    surface.set_alpha(shape, int(params.get("alpha", 55)))
+
+
 def _source_list(
     surface: Surface, slide: Any, region: Region, params: Mapping[str, Any], theme: BlockTheme
 ) -> None:
@@ -831,6 +869,9 @@ _BLOCKS: dict[str, Any] = {
     "table": _table,
     "pull_quote": _pull_quote,
     "image": _image,
+    "metric": _metric,
+    "panel": _panel,
+    "scrim_band": _scrim_band,
     "source_list": _source_list,
     "accent_number": _accent_number,
     "decision_chip": _decision_chip,
