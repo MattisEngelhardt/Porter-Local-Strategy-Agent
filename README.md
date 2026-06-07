@@ -5,7 +5,7 @@ professional **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — r
 your machine with no external AI APIs, ever. Type `porter` in your terminal to start chatting.
 
 > ### 🎯 Best demo output
-> <!-- BEST_DEMO_PPTX:START --> (auto-updated — do not edit by hand)
+> <-- BEST_DEMO_PPTX:START --> (auto-updated — do not edit by hand)
 > ** Threat assessment of Apptronik and Neura's strategic response options(output/2026-06-04_create_a_comprehensive_board_grade_competitive_thr_deck.pptx) **
 > — our latest and best end-to-end run. Click to download/view.
 > <!-- BEST_DEMO_PPTX:END -->
