@@ -4,7 +4,7 @@
 professional **PDF briefs**, **PowerPoint decks**, and **Excel workbooks** — running entirely on
 your machine with no external AI APIs, ever. Type `porter` in your terminal to start chatting.
 
-> ### 🎯 Best demo output
+> ### Best demo output
 > <-- BEST_DEMO_PPTX:START --> 
 > <-- BEST_DEMO_PPTX:END -->
 >
