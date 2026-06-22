@@ -7,6 +7,22 @@
 
 ---
 
+## Blocks C + D — Analyst + Builder use cases ✅ (2026-06-23)
+
+**Block C — Analyst / Recruiting:** `score-cvs <cvs> --job <profile> [--criteria ...]` scores CVs
+0-100 against weighted criteria (zero-hallucination, evidence-required rubric — the human decides),
+ranks best-first, writes a Neura Excel ranking. New: `models/scoring.py`, `core/recruiting.py`,
+`playbooks/recruiting_screening_playbook.md`, `read_document_hifi` (Docling-first cascade). 11 tests.
+
+**Block D — Builder / Finance:** `build-report <docs> --period "Q2 2026"` consolidates internal
+figures into ONE management report — every figure traced to its source — writing a Markdown
+blueprint + Excel key-figures table. New: `models/reporting.py`, `core/finance_reporting.py`,
+`playbooks/finance_reporting_playbook.md`. 4 tests. (Render a Neura PDF/PPTX via `prepare`.)
+
+All 29 dimension tests pass · ruff + mypy --strict clean. **Landed on `main`** (counts on the
+contribution graph). See **`COMMIT_ARCHITECTURE.md`** for the binding commit/branch workflow
+(main = all-rounder; dimensions = profiles, not branches; Claude does all git; no manual PRs).
+
 ## Block A — Document-reader foundation ✅ (2026-06-23)
 
 **Goal:** give Porter the ability to *read* the document types the new dimensions need (Word, PowerPoint)
