@@ -25,10 +25,16 @@ from rich.table import Table
 from core.config import AppConfig, load_config
 from core.docx_reader import DocxReadError
 from core.excel_reader import ExcelReadError
-from core.intake import read_document, render_document, render_result, run_repl
+from core.intake import read_document, read_document_hifi, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
 from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
 from core.pptx_reader import PptxReadError
+from core.recruiting import (
+    parse_criteria_arg,
+    render_screening_excel,
+    render_screening_markdown,
+    screen_cvs,
+)
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -332,6 +338,67 @@ def analyze_doc(
         client.close()
 
     render_document(console, doc, config.output.colors.accent_cyan)
+
+
+def _read_job_profile(job: str, client: LocalLLMClient) -> str:
+    """Resolve ``--job`` to text: a readable document, a .txt/.md file, or inline text."""
+    path = Path(job)
+    if path.is_file():
+        if path.suffix.lower() in {".txt", ".md"}:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        return read_document_hifi(path, llm=client).text
+    return job
+
+
+@app.command(name="score-cvs")
+def score_cvs(
+    ctx: typer.Context,
+    cvs: Annotated[
+        list[Path], typer.Argument(help="CV files to screen (.pdf / .docx / image / .xlsx)")
+    ],
+    job: Annotated[
+        str,
+        typer.Option("--job", "-j", help="Job profile: file path (PDF/DOCX/TXT) or inline text"),
+    ],
+    criteria: Annotated[
+        str | None,
+        typer.Option("--criteria", help="Comma-separated criteria (else derived from profile)"),
+    ] = None,
+) -> None:
+    """Score CVs against a job profile and rank them (Analyst dimension; the human decides).
+
+    Reads each CV, scores it 0-100 against weighted criteria under a zero-hallucination rubric
+    (every score traceable to the CV), ranks best-first, and writes a Neura-styled Excel ranking
+    to ``output/``. Criteria are derived from the job profile unless given via ``--criteria``.
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)
+
+    try:
+        job_text = _read_job_profile(job, client)
+        with console.status("[dim]reading CVs…[/dim]", spinner="dots"):
+            cv_docs = [read_document_hifi(path, llm=client) for path in cvs]
+        chosen = parse_criteria_arg(criteria) if criteria else None
+        with console.status("[dim]scoring + ranking…[/dim]", spinner="dots"):
+            result = screen_cvs(client, job_text, cv_docs, criteria=chosen)
+        xlsx_path = render_screening_excel(result, config.output.output_dir, config)
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    console.print(Markdown(render_screening_markdown(result)))
+    console.print(
+        Panel(
+            f"Excel ranking written to: {xlsx_path}",
+            border_style=config.output.colors.accent_cyan,
+        )
+    )
 
 
 if __name__ == "__main__":

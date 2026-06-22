@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from core.config import AppConfig
+from core.docling_reader import DoclingReadError, read_with_docling
 from core.docx_reader import read_docx
 from core.excel_reader import ExcelReadError, read_excel
 from core.intent_parser import parse_effort_override
@@ -73,6 +74,19 @@ def read_document(path: Path, llm: LocalLLMClient | None = None) -> DocContent:
     if suffix in _PPTX_SUFFIXES:
         return read_pptx(path)
     return read_pdf(path, llm=llm)
+
+
+def read_document_hifi(path: Path, llm: LocalLLMClient | None = None) -> DocContent:
+    """High-fidelity-first read: try Docling, else fall back to the lightweight readers (fail-open).
+
+    Preferred entry point for the Analyst/Builder dimensions where exact tables / multi-column
+    layout matter. If the optional ``docling`` package is absent (or conversion fails), Porter
+    falls back to :func:`read_document` so it always returns usable text.
+    """
+    try:
+        return read_with_docling(path)
+    except DoclingReadError:
+        return read_document(path, llm=llm)
 
 
 def render_document(console: Console, doc: DocContent, accent: str) -> None:
