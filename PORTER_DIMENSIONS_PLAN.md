@@ -7,6 +7,13 @@
 
 ---
 
+> **🔧 UPDATE 23.06.2026 — Verteilungsmodell präzisiert (maßgeblich: `COMMIT_ARCHITECTURE.md`):**
+> Dimensionen werden **Profile auf `main`**, NICHT dauerhafte Branches (Dauer-Branches zählen nicht
+> auf GitHub und laufen ständig „behind"). `main` = Alleskönner; alles landet dort und zählt sofort.
+> Branches nur kurzlebig, von Claude selbst per regulärem Merge zusammengeführt (kein Hand-PR).
+> Separate Repos pro Abteilung bleiben das Endziel. Die §5-Tabelle unten (analyst/builder/all als
+> Dauer-Branches) ist damit überholt — es gilt `COMMIT_ARCHITECTURE.md`.
+
 ## 0. Für dich in einem Satz (BWL-Klartext)
 
 Porter bleibt **ein Motor**. Was sich pro Abteilung ändert, sind nur die **drei austauschbaren

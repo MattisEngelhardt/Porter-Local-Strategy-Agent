@@ -25,10 +25,17 @@ from rich.table import Table
 from core.config import AppConfig, load_config
 from core.docx_reader import DocxReadError
 from core.excel_reader import ExcelReadError
-from core.intake import read_document, render_document, render_result, run_repl
+from core.finance_reporting import build_report, render_report_excel, render_report_markdown
+from core.intake import read_document, read_document_hifi, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
 from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
 from core.pptx_reader import PptxReadError
+from core.recruiting import (
+    parse_criteria_arg,
+    render_screening_excel,
+    render_screening_markdown,
+    screen_cvs,
+)
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -332,6 +339,115 @@ def analyze_doc(
         client.close()
 
     render_document(console, doc, config.output.colors.accent_cyan)
+
+
+def _read_job_profile(job: str, client: LocalLLMClient) -> str:
+    """Resolve ``--job`` to text: a readable document, a .txt/.md file, or inline text."""
+    path = Path(job)
+    if path.is_file():
+        if path.suffix.lower() in {".txt", ".md"}:
+            return path.read_text(encoding="utf-8", errors="ignore")
+        return read_document_hifi(path, llm=client).text
+    return job
+
+
+@app.command(name="score-cvs")
+def score_cvs(
+    ctx: typer.Context,
+    cvs: Annotated[
+        list[Path], typer.Argument(help="CV files to screen (.pdf / .docx / image / .xlsx)")
+    ],
+    job: Annotated[
+        str,
+        typer.Option("--job", "-j", help="Job profile: file path (PDF/DOCX/TXT) or inline text"),
+    ],
+    criteria: Annotated[
+        str | None,
+        typer.Option("--criteria", help="Comma-separated criteria (else derived from profile)"),
+    ] = None,
+) -> None:
+    """Score CVs against a job profile and rank them (Analyst dimension; the human decides).
+
+    Reads each CV, scores it 0-100 against weighted criteria under a zero-hallucination rubric
+    (every score traceable to the CV), ranks best-first, and writes a Neura-styled Excel ranking
+    to ``output/``. Criteria are derived from the job profile unless given via ``--criteria``.
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)
+
+    try:
+        job_text = _read_job_profile(job, client)
+        with console.status("[dim]reading CVs…[/dim]", spinner="dots"):
+            cv_docs = [read_document_hifi(path, llm=client) for path in cvs]
+        chosen = parse_criteria_arg(criteria) if criteria else None
+        with console.status("[dim]scoring + ranking…[/dim]", spinner="dots"):
+            result = screen_cvs(client, job_text, cv_docs, criteria=chosen)
+        xlsx_path = render_screening_excel(result, config.output.output_dir, config)
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    console.print(Markdown(render_screening_markdown(result)))
+    console.print(
+        Panel(
+            f"Excel ranking written to: {xlsx_path}",
+            border_style=config.output.colors.accent_cyan,
+        )
+    )
+
+
+@app.command(name="build-report")
+def build_report_cmd(
+    ctx: typer.Context,
+    files: Annotated[
+        list[Path], typer.Argument(help="Internal documents with figures (.xlsx / .pdf / .docx)")
+    ],
+    period: Annotated[
+        str, typer.Option("--period", "-p", help="Reporting period, e.g. 'Q2 2026'")
+    ] = "",
+    title: Annotated[str, typer.Option("--title", help="Report title (else inferred)")] = "",
+) -> None:
+    """Consolidate internal figures into a management report (every number traced to source).
+
+    The Builder dimension: reads the documents, consolidates them into one management/board report
+    under a zero-hallucination finance rubric (each figure traced to its source), and writes a
+    Markdown blueprint + an Excel key-figures table to ``output/``. Render a Neura PDF/PPTX from it
+    via ``prepare`` when a presentation is needed.
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)
+
+    try:
+        with console.status("[dim]reading documents…[/dim]", spinner="dots"):
+            docs = [read_document_hifi(path, llm=client) for path in files]
+        with console.status("[dim]consolidating report…[/dim]", spinner="dots"):
+            report = build_report(client, docs, period=period, title=title)
+        xlsx_path = render_report_excel(report, config.output.output_dir, config)
+        md_path = xlsx_path.with_name(xlsx_path.name.replace("_key_figures.xlsx", "_report.md"))
+        md_path.write_text(render_report_markdown(report), encoding="utf-8")
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    console.print(Markdown(render_report_markdown(report)))
+    console.print(
+        Panel(
+            f"Report: {md_path}\nKey figures (Excel): {xlsx_path}",
+            border_style=config.output.colors.accent_cyan,
+        )
+    )
 
 
 if __name__ == "__main__":
