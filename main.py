@@ -23,10 +23,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from core.config import AppConfig, load_config
+from core.docx_reader import DocxReadError
 from core.excel_reader import ExcelReadError
 from core.intake import read_document, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
 from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
+from core.pptx_reader import PptxReadError
 from core.researcher import ResearchEngine, SearchCache, SearXNGError
 from core.startup import StartupError, check_llm_backend, check_searxng
 from llm.local_llm_client import LLMError, LocalLLMClient
@@ -243,7 +245,8 @@ _FORMAT_CHOICES: dict[str, list[OutputFormat]] = {
 def prepare(
     ctx: typer.Context,
     files: Annotated[
-        list[Path], typer.Argument(help="One or more internal document paths (PDF / image / .xlsx)")
+        list[Path],
+        typer.Argument(help="Internal document paths (PDF / image / .xlsx / .docx / .pptx)"),
     ],
     task_text: Annotated[
         str,
@@ -292,7 +295,7 @@ def prepare(
                 documents=documents,
                 doc_formats=formats,
             )
-    except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
         console.print(Panel(str(exc), title="document error", border_style="red"))
         raise typer.Exit(code=1) from exc
     except StartupError as exc:
@@ -310,7 +313,9 @@ def prepare(
 @app.command(name="analyze-doc")
 def analyze_doc(
     ctx: typer.Context,
-    doc_path: Annotated[Path, typer.Argument(help="Path to a PDF / image / .xlsx file")],
+    doc_path: Annotated[
+        Path, typer.Argument(help="Path to a PDF / image / .xlsx / .docx / .pptx file")
+    ],
 ) -> None:
     """Read a document and print its extracted content (no synthesis — Phase 2)."""
     obj = ctx.obj or {}
@@ -320,7 +325,7 @@ def analyze_doc(
     try:
         with console.status("[dim]reading document…[/dim]", spinner="dots"):
             doc = read_document(doc_path, llm=client)
-    except (PdfReadError, ExcelReadError, FileNotFoundError) as exc:
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
         console.print(Panel(str(exc), title="document error", border_style="red"))
         raise typer.Exit(code=1) from exc
     finally:

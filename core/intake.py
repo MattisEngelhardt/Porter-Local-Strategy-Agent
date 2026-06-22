@@ -3,7 +3,7 @@
 A rich-formatted chat loop over :class:`LocalLLMClient`. Free-text input runs the full agent
 pipeline (intent → clarification → research-plan confirm → research → reasoning → structured
 analysis, see :mod:`core.pipeline`). If the user drops a bare path to a supported document
-(PDF / image / .xlsx), it is routed to the matching reader and the extracted content is shown.
+(PDF / image / .xlsx / .docx / .pptx), it is routed to the matching reader and the content shown.
 Voice input (Ctrl+Space) remains a Phase 5 TODO.
 
 This module is the REPL's presentation layer: :class:`ReplInteraction` is the rich
@@ -21,11 +21,13 @@ from rich.panel import Panel
 from rich.prompt import Confirm, Prompt
 
 from core.config import AppConfig
+from core.docx_reader import read_docx
 from core.excel_reader import ExcelReadError, read_excel
 from core.intent_parser import parse_effort_override
 from core.memory import MemoryStore, append_brain_additions
 from core.pdf_reader import PdfReadError, read_pdf
 from core.pipeline import resolve_memory, run_pipeline
+from core.pptx_reader import read_pptx
 from core.researcher import SearXNGError
 from core.startup import StartupError
 from core.voice_input import VoiceError, VoiceInput, build_voice_input
@@ -37,8 +39,10 @@ from models.task import EffortLevel, TaskRequest
 EXIT_COMMANDS = {"exit", "quit", ":q", "q"}
 
 _EXCEL_SUFFIXES = frozenset({".xlsx", ".xlsm"})
+_WORD_SUFFIXES = frozenset({".docx"})
+_PPTX_SUFFIXES = frozenset({".pptx"})
 _PDF_LIKE_SUFFIXES = frozenset({".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tiff", ".tif", ".webp"})
-_SUPPORTED_SUFFIXES = _EXCEL_SUFFIXES | _PDF_LIKE_SUFFIXES
+_SUPPORTED_SUFFIXES = _EXCEL_SUFFIXES | _WORD_SUFFIXES | _PPTX_SUFFIXES | _PDF_LIKE_SUFFIXES
 
 # How much extracted text to show in the REPL before truncating.
 _DOC_PREVIEW_CHARS = 2000
@@ -60,9 +64,14 @@ def detect_file_path(text: str) -> Path | None:
 
 
 def read_document(path: Path, llm: LocalLLMClient | None = None) -> DocContent:
-    """Dispatch a document path to the correct reader (Excel vs PDF/image)."""
-    if path.suffix.lower() in _EXCEL_SUFFIXES:
+    """Dispatch a document path to the correct reader (Excel / Word / PowerPoint / PDF / image)."""
+    suffix = path.suffix.lower()
+    if suffix in _EXCEL_SUFFIXES:
         return read_excel(path)
+    if suffix in _WORD_SUFFIXES:
+        return read_docx(path)
+    if suffix in _PPTX_SUFFIXES:
+        return read_pptx(path)
     return read_pdf(path, llm=llm)
 
 
