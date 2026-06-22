@@ -25,6 +25,7 @@ from rich.table import Table
 from core.config import AppConfig, load_config
 from core.docx_reader import DocxReadError
 from core.excel_reader import ExcelReadError
+from core.finance_reporting import build_report, render_report_excel, render_report_markdown
 from core.intake import read_document, read_document_hifi, render_document, render_result, run_repl
 from core.pdf_reader import PdfReadError
 from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
@@ -396,6 +397,54 @@ def score_cvs(
     console.print(
         Panel(
             f"Excel ranking written to: {xlsx_path}",
+            border_style=config.output.colors.accent_cyan,
+        )
+    )
+
+
+@app.command(name="build-report")
+def build_report_cmd(
+    ctx: typer.Context,
+    files: Annotated[
+        list[Path], typer.Argument(help="Internal documents with figures (.xlsx / .pdf / .docx)")
+    ],
+    period: Annotated[
+        str, typer.Option("--period", "-p", help="Reporting period, e.g. 'Q2 2026'")
+    ] = "",
+    title: Annotated[str, typer.Option("--title", help="Report title (else inferred)")] = "",
+) -> None:
+    """Consolidate internal figures into a management report (every number traced to source).
+
+    The Builder dimension: reads the documents, consolidates them into one management/board report
+    under a zero-hallucination finance rubric (each figure traced to its source), and writes a
+    Markdown blueprint + an Excel key-figures table to ``output/``. Render a Neura PDF/PPTX from it
+    via ``prepare`` when a presentation is needed.
+    """
+    obj = ctx.obj or {}
+    config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
+    config, client = _bootstrap(config_path)
+
+    try:
+        with console.status("[dim]reading documents…[/dim]", spinner="dots"):
+            docs = [read_document_hifi(path, llm=client) for path in files]
+        with console.status("[dim]consolidating report…[/dim]", spinner="dots"):
+            report = build_report(client, docs, period=period, title=title)
+        xlsx_path = render_report_excel(report, config.output.output_dir, config)
+        md_path = xlsx_path.with_name(xlsx_path.name.replace("_key_figures.xlsx", "_report.md"))
+        md_path.write_text(render_report_markdown(report), encoding="utf-8")
+    except (PdfReadError, ExcelReadError, DocxReadError, PptxReadError, FileNotFoundError) as exc:
+        console.print(Panel(str(exc), title="document error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    except LLMError as exc:
+        console.print(Panel(str(exc), title="LLM error", border_style="red"))
+        raise typer.Exit(code=1) from exc
+    finally:
+        client.close()
+
+    console.print(Markdown(render_report_markdown(report)))
+    console.print(
+        Panel(
+            f"Report: {md_path}\nKey figures (Excel): {xlsx_path}",
             border_style=config.output.colors.accent_cyan,
         )
     )
