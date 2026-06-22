@@ -53,5 +53,7 @@ module = [
     "pyaudio",
     "pynput",
     "pynput.*",
+    "docling",
+    "docling.*",
 ]
 ignore_missing_imports = true
