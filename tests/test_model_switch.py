@@ -8,6 +8,7 @@ assert the registry, active-model detection, and that a local switch invokes the
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 
 import pytest
@@ -81,3 +82,42 @@ def test_apply_model_skips_hook_when_absent(monkeypatch: pytest.MonkeyPatch) -> 
 
     apply_model("gemma4-e4b", Path("config.yaml"), _console())
     assert calls == ["switch-model.ps1"]  # boot hook skipped
+
+
+# --- Nemotron cloud branch (Slice 3) --------------------------------------------------
+
+
+def test_nemotron_in_registry_and_active_detection() -> None:
+    """The cloud model is in the picker and detected as active by its OpenRouter model id."""
+    nemo = find_model("nemotron")
+    assert nemo is not None
+    assert nemo.title == "Nemotron 3 Ultra 550B" and nemo.kind == "nemotron"
+    assert active_model_value(LLMConfig(model=model_switch._NEMOTRON_MODEL)) == "nemotron"
+
+
+def test_resolve_openrouter_key_prefers_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-from-env")
+    assert model_switch._resolve_openrouter_key() == "sk-or-from-env"
+
+
+def test_apply_model_nemotron_without_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No key → a helpful error (and no relaunch); the caller keeps the current client."""
+    monkeypatch.setattr(model_switch, "_resolve_openrouter_key", lambda: "")
+    with pytest.raises(ModelSwitchError):
+        apply_model("nemotron", Path("config.yaml"), _console())
+
+
+def test_apply_model_nemotron_with_key_returns_openrouter_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With a key, the cloud switch returns an openrouter config and bridges the key into env."""
+    monkeypatch.setattr(model_switch, "_resolve_openrouter_key", lambda: "sk-or-test")
+    monkeypatch.setattr(model_switch, "_build_ca_bundle", lambda: None)
+    monkeypatch.setattr(model_switch, "load_config", lambda _p: AppConfig())
+    monkeypatch.setenv("OPENAI_API_KEY", "placeholder")  # so monkeypatch restores it after
+
+    cfg = apply_model("nemotron", Path("config.yaml"), _console())
+    assert cfg.llm.provider == "openrouter"
+    assert cfg.llm.model == model_switch._NEMOTRON_MODEL
+    assert cfg.llm.base_url == model_switch._NEMOTRON_BASE_URL
+    assert os.environ["OPENAI_API_KEY"] == "sk-or-test"  # bridged into the env the client reads
