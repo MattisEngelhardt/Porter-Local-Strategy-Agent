@@ -7,6 +7,21 @@
 
 ---
 
+## Block B — Profile switch ✅ (2026-06-23)
+
+`python main.py profile [name]` + `switch-profile.ps1` select the active dimension on ONE codebase:
+`research` / `analyst` / `builder` / `all` (default = all-rounder; existing behaviour unchanged).
+**Dimensions are named by function (analyst / builder), NOT by department** (Recruiting / Finance may
+or may not adopt them — they are just the first use cases). Each profile gates its commands
+(analyst → `score-cvs`; builder → `build-report`; research → `research`/`analyze`/`prepare`;
+`ask`/`analyze-doc`/`profile` always on). The active profile lives in `./.porter_profile` (gitignored,
+machine-local) — deliberately NOT in config.yaml, so switching never collides with config edits and a
+fresh clone defaults to the all-rounder. New: `core/profile.py`, `switch-profile.ps1`,
+`tests/test_profile.py` (10 tests). ruff + mypy --strict clean.
+
+Also this session: a **git-guard hook** (`.claude/settings.local.json`, PreToolUse) now mechanically
+blocks rebase / force-push / squash-merge / amend / reset --hard in any chat — proven live.
+
 ## Blocks C + D — Analyst + Builder use cases ✅ (2026-06-23)
 
 **Block C — Analyst / Recruiting:** `score-cvs <cvs> --job <profile> [--criteria ...]` scores CVs

@@ -52,7 +52,7 @@ Drei Dinge zählen — **Branches gehören NICHT dazu**:
    `models/scoring.py` + `playbooks/recruiting_*`; Builder = `core/finance_reporting.py` +
    `models/reporting.py` + `playbooks/finance_*`. **Das** macht den späteren Repo-Split mühelos —
    nicht Branches.
-3. **Profile = der Schalter** (`research`/`recruiting`/`finance`/`all`, Block B). Ein Code → läuft
+3. **Profile = der Schalter** (`research`/`analyst`/`builder`/`all`, Block B). Ein Code → läuft
    als Alleskönner *oder* als eine einzelne Dimension. Liefert „einer der alles kann" **und** die
    spezifischen Porter aus *einer* Codebasis.
 
@@ -64,7 +64,7 @@ Claude reine Spiegel-Branches von `main` an — optional, rein kosmetisch, keine
 **Endziel (Strategie-Zettel):** jede Dimension wird ein **eigenes Repo** (eigene `main`, eigene
 Zählung) — per `git subtree split` von {Motor + dieser Dimension}, **kein** History-Rewrite. Erst
 wenn die Dimensionen stabil sind. (Optional vorher: Dimension-Module in Unterordner gruppieren,
-z. B. `core/dimensions/recruiting/`, macht den Split noch sauberer.)
+z. B. `core/dimensions/analyst/`, macht den Split noch sauberer.)
 
 ---
 

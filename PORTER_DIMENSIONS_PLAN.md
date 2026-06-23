@@ -145,8 +145,8 @@ Jede Dimension = **Motor + Profil** (Befehle + Playbook + Brain-Pack + Vorlagen)
 ```
 profiles/
   research/   profile.yaml  brain.research.md   (playbooks/templates: bestehende)
-  recruiting/ profile.yaml  brain.recruiting.md  playbooks/recruiting_*.md  templates/...
-  finance/    profile.yaml  brain.finance.md     playbooks/finance_*.md     templates/...
+  analyst/    profile.yaml  brain.analyst.md     playbooks/recruiting_*.md  templates/...
+  builder/    profile.yaml  brain.builder.md     playbooks/finance_*.md     templates/...
   all/        profile.yaml  (aktiviert alle Befehle/Playbooks)
 ```
 
@@ -154,11 +154,11 @@ profiles/
 
 ```yaml
 profile:
-  name: recruiting
-  commands: [ask, analyze-doc, prepare, score-cvs]   # welche Befehle sichtbar sind
-  playbooks: [recruiting_screening, doc_prep]          # Regelwerk
-  brain: ./profiles/recruiting/brain.recruiting.md     # Abteilungs-Wissen
-  templates_dir: ./profiles/recruiting/templates        # Vorlagen
+  name: analyst                                        # function-named (not the department)
+  commands: [ask, analyze-doc, score-cvs]              # which commands are visible
+  playbooks: [recruiting_screening, doc_prep]          # the use case's rulebook
+  brain: ./profiles/analyst/brain.analyst.md           # department knowledge
+  templates_dir: ./profiles/analyst/templates          # templates
   default_format: excel                                  # Default-Deliverable
 ```
 
