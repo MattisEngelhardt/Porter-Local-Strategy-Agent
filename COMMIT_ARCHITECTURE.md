@@ -7,10 +7,12 @@
 
 ## In einem Satz (BWL-Klartext)
 
-**`main` ist der „Porter, der alles kann" und die einzige Wahrheit.** Alle Arbeit landet auf
-`main` → wird sofort gezählt. **Claude (der Agent) macht das Git komplett selbst** — committen
-und pushen — **du machst nichts von Hand.** Die einzelnen Abteilungs-Versionen sind später
-**Profile/eigene Repos**, *nicht* dauerhafte Branches.
+**`main` ist der „Porter, der alles kann" und die einzige Linie, die zählt** (Streak/Contributions).
+Alle echte Arbeit wird auf `main` committet → zählt sofort. Die Dimensionen sind **sauber getrennte
+Module** im Code, per **Profil** schaltbar (= ein Code, der entweder alles kann *oder* als eine
+einzelne Dimension läuft). **Am Ende wird jede Dimension ein eigenes Repo — sauber, *weil* die
+Module getrennt sind, nicht wegen Branches.** **Claude macht das Git komplett selbst; du machst
+nichts von Hand.**
 
 ---
 
@@ -40,21 +42,29 @@ und pushen — **du machst nichts von Hand.** Die einzelnen Abteilungs-Versionen
 
 ---
 
-## Die Dimensionen — wie getrennt wird (ohne Branch-Chaos)
+## Die Dimensionen — was sie sauber UND zählbar UND repo-fähig macht
 
-| Dimension | Heute | Trennung |
-|---|---|---|
-| Research / Strategy | auf `main` | Profil `research` (+ Tag als Snapshot) |
-| Analyst / Recruiting | auf `main` (`score-cvs`) | Profil `recruiting` |
-| Builder / Finance | auf `main` (`build-report`) | Profil `finance` |
-| Alleskönner | = `main` | Profil `all` |
+Drei Dinge zählen — **Branches gehören NICHT dazu**:
 
-- **Dimensionen = Profile (Einstellung), KEINE Dauer-Branches.** Ein Dauer-Branch pro Abteilung
-  würde (a) nicht gezählt bis gemerged und (b) ständig „behind" laufen — genau das Chaos, das wir
-  vermeiden. Deshalb: ein Code auf `main`, ein Profil wählt die Abteilung.
-- **Endziel (Strategie-Zettel):** ein eigenes **Repo pro Abteilung** — jedes Repo hat seine eigene
-  `main` und eigene Contribution-Zählung. Wird aus dem Alleskönner gepackt, wenn die Dimensionen
-  stabil sind. (Profil-Schalter = Zwischenschritt dorthin.)
+1. **`main` = Entwicklung + Zählung.** Jede echte Änderung wird auf `main` committet → zählt sofort
+   (Streak sicher). `main` mit allen Dimensionen = der Alleskönner.
+2. **Saubere Module pro Dimension** auf dem gemeinsamen Motor: Analyst = `core/recruiting.py` +
+   `models/scoring.py` + `playbooks/recruiting_*`; Builder = `core/finance_reporting.py` +
+   `models/reporting.py` + `playbooks/finance_*`. **Das** macht den späteren Repo-Split mühelos —
+   nicht Branches.
+3. **Profile = der Schalter** (`research`/`recruiting`/`finance`/`all`, Block B). Ein Code → läuft
+   als Alleskönner *oder* als eine einzelne Dimension. Liefert „einer der alles kann" **und** die
+   spezifischen Porter aus *einer* Codebasis.
+
+**Branches:** nur **kurzlebige Feature-Branches**, die Claude selbst nach `main` merged. **Keine
+dauerhaften Dimensions-Branches** — sie zählen nicht (bis gemerged), laufen „behind" und bringen
+für den Repo-Split keinen Vorteil. (Willst du die Dimensionen trotzdem als Branches *sehen*, legt
+Claude reine Spiegel-Branches von `main` an — optional, rein kosmetisch, keine Arbeit darauf.)
+
+**Endziel (Strategie-Zettel):** jede Dimension wird ein **eigenes Repo** (eigene `main`, eigene
+Zählung) — per `git subtree split` von {Motor + dieser Dimension}, **kein** History-Rewrite. Erst
+wenn die Dimensionen stabil sind. (Optional vorher: Dimension-Module in Unterordner gruppieren,
+z. B. `core/dimensions/recruiting/`, macht den Split noch sauberer.)
 
 ---
 
