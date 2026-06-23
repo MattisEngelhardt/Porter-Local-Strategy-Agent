@@ -10,8 +10,9 @@ from rich.console import Console
 
 import core.intake as intake
 import core.profile as profile_mod
-from core.config import AppConfig
+from core.config import AppConfig, LLMConfig
 from core.intake import ReplInteraction, detect_file_path, read_document, render_result
+from core.model_switch import ModelSwitchError
 from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
 from models.synthesis import AnalysisOutput, Critique, PipelineResult, Section, SourceRef
 from models.task import EffortLevel, Intent, Language, OutputFormat, TaskType
@@ -323,3 +324,101 @@ def test_role_switch_unknown_arg_is_handled(
     intake._handle_role_switch(console, "cyan", "/role bogus")
     assert pfile.read_text(encoding="utf-8").strip() == "all"
     assert "unknown role" in console.file.getvalue()  # type: ignore[attr-defined]
+
+
+# --- /model AI-model switch (Slice 2) -------------------------------------------------
+
+
+class _SpyClient:
+    """Duck-typed LocalLLMClient stand-in that records whether close() was called."""
+
+    def __init__(self, model_name: str = "gemma4:e4b", backend_url: str = "http://x") -> None:
+        self.model_name = model_name
+        self.backend_url = backend_url
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_model_switch_hotswaps_client(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """/model picks a model, boots it (mocked), rebuilds the client, and syncs config.llm."""
+    monkeypatch.setattr(intake, "select_choice", lambda *a, **k: "gemma4-12b")
+    new_cfg = AppConfig()
+    new_cfg.llm = LLMConfig(model="Porter-12B", num_ctx=45056)
+    monkeypatch.setattr(intake, "apply_model", lambda value, path, console: new_cfg)
+
+    class _FakeClient:
+        def __init__(self, llm: LLMConfig) -> None:
+            self.model_name = llm.model
+            self.backend_url = "http://localhost:1234"
+
+        def close(self) -> None:  # pragma: no cover - the new client is not closed here
+            ...
+
+    monkeypatch.setattr(intake, "LocalLLMClient", _FakeClient)
+
+    config = AppConfig()  # default model gemma4:e4b → not a registry served id (active = None)
+    old = _SpyClient()
+    new_client = intake._handle_model_switch(
+        _capture_console(), "cyan", "/model", old, config, tmp_path / "config.yaml"  # type: ignore[arg-type]
+    )
+    assert isinstance(new_client, _FakeClient)
+    assert new_client.model_name == "Porter-12B"
+    assert config.llm.model == "Porter-12B"  # in-memory config kept in sync
+    assert old.closed  # old transport freed
+
+
+def test_model_switch_failure_keeps_client(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If the boot fails, the current client is kept (and not closed)."""
+    monkeypatch.setattr(intake, "select_choice", lambda *a, **k: "gemma4-12b")
+
+    def _boom(*_a: object, **_k: object) -> AppConfig:
+        raise ModelSwitchError("boot failed")
+
+    monkeypatch.setattr(intake, "apply_model", _boom)
+    old = _SpyClient()
+    result = intake._handle_model_switch(
+        _capture_console(), "cyan", "/model", old, AppConfig(), tmp_path / "c.yaml"  # type: ignore[arg-type]
+    )
+    assert result is old
+    assert not old.closed
+
+
+def test_model_switch_same_model_is_noop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Choosing the already-active model neither boots nor swaps the client."""
+
+    def _must_not_boot(*_a: object, **_k: object) -> AppConfig:
+        pytest.fail("apply_model must not run for the active model")
+
+    monkeypatch.setattr(intake, "apply_model", _must_not_boot)
+    config = AppConfig()
+    config.llm = LLMConfig(model="Porter-LMStudio")  # active = gemma4-e4b
+    old = _SpyClient(model_name="Porter-LMStudio")
+    result = intake._handle_model_switch(
+        _capture_console(), "cyan", "/model gemma4-e4b", old, config, tmp_path / "c.yaml"  # type: ignore[arg-type]
+    )
+    assert result is old
+    assert not old.closed
+
+
+def test_model_switch_unknown_arg_is_handled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/model <bogus> reports the error and keeps the current client."""
+
+    def _must_not_boot(*_a: object, **_k: object) -> AppConfig:
+        pytest.fail("apply_model must not run for an unknown model")
+
+    monkeypatch.setattr(intake, "apply_model", _must_not_boot)
+    console = _capture_console()
+    old = _SpyClient()
+    result = intake._handle_model_switch(
+        console, "cyan", "/model bogus", old, AppConfig(), tmp_path / "c.yaml"  # type: ignore[arg-type]
+    )
+    assert result is old
+    assert "unknown model" in console.file.getvalue()  # type: ignore[attr-defined]

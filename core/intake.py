@@ -26,6 +26,13 @@ from core.docx_reader import read_docx
 from core.excel_reader import ExcelReadError, read_excel
 from core.intent_parser import parse_effort_override
 from core.memory import MemoryStore, append_brain_additions
+from core.model_switch import (
+    MODELS,
+    ModelSwitchError,
+    active_model_value,
+    apply_model,
+    find_model,
+)
 from core.pdf_reader import PdfReadError, read_pdf
 from core.picker import Choice
 from core.picker import select as select_choice
@@ -220,6 +227,7 @@ def run_repl(
     client: LocalLLMClient,
     config: AppConfig,
     console: Console | None = None,
+    config_path: Path | None = None,
 ) -> None:
     """Run the interactive REPL until the user exits.
 
@@ -227,9 +235,11 @@ def run_repl(
         client: The LLM client to answer with.
         config: The loaded application config (used for accent color, etc.).
         console: Optional rich Console (injectable for testing).
+        config_path: The config file backing this session — reloaded after a ``/model`` switch.
     """
     console = console or Console()
     accent = config.output.colors.accent_cyan
+    cfg_path = config_path or Path("config.yaml")
 
     # Open persistent memory once for the session (advisory — None if disabled/unavailable).
     memory = resolve_memory(
@@ -262,7 +272,7 @@ def run_repl(
             f"   backend: {client.backend_url}\n"
             "Type a task — the agent plans, researches (multi-agent), and produces a structured "
             "analysis.\n"
-            "Switch role: [bold]/role[/bold] "
+            "Switch: [bold]/model[/bold] (AI model) · [bold]/role[/bold] "
             "(Researcher / Analyst / Builder / Allrounder).\n"
             "Effort: prefix with [bold]/effort low|high|ultra[/bold] (alone = set the session "
             "default; auto-detected otherwise).\n"
@@ -300,6 +310,10 @@ def run_repl(
 
             if text.lower() == "/role" or text.lower().startswith("/role "):
                 _handle_role_switch(console, accent, text)
+                continue
+
+            if text.lower() == "/model" or text.lower().startswith("/model "):
+                client = _handle_model_switch(console, accent, text, client, config, cfg_path)
                 continue
 
             override, stripped = parse_effort_override(text)
@@ -369,6 +383,80 @@ def _handle_role_switch(console: Console, accent: str, raw: str) -> None:
             border_style=accent,
         )
     )
+
+
+def _handle_model_switch(
+    console: Console,
+    accent: str,
+    raw: str,
+    client: LocalLLMClient,
+    config: AppConfig,
+    config_path: Path,
+) -> LocalLLMClient:
+    """Switch Porter's AI model in-session, booting whatever it needs, and hot-swap the client.
+
+    ``/model`` opens an arrow-key menu of the real model names; ``/model <value>`` switches
+    directly. Reuses the proven boot scripts (core/model_switch.py) — the same cold-start
+    ``porter`` does — then rebuilds the live client from the reloaded config. On failure the
+    current client is kept. Never touches the active role (``.porter_profile``): the role stays
+    locked across a model switch.
+
+    Returns the client to use going forward (new on success, the original otherwise).
+    """
+    parts = raw.split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+    current_value = active_model_value(config.llm)
+
+    if arg:
+        chosen: str | None = arg
+    else:
+        choices = [Choice(value=m.value, title=m.title, hint=m.hint) for m in MODELS]
+        chosen = select_choice(
+            "Pick Porter's AI model", choices, active_value=current_value, console=console
+        )
+
+    if not chosen:
+        console.print("[dim]model unchanged[/dim]")
+        return client
+
+    target = find_model(chosen)
+    if target is None:
+        valid = ", ".join(m.value for m in MODELS)
+        console.print(
+            Panel(
+                f"Unknown model '{chosen}'. Choose: {valid}.",
+                title="unknown model",
+                border_style="red",
+            )
+        )
+        return client
+
+    if target.value == current_value:
+        console.print(f"[dim]model stays [bold]{client.model_name}[/bold][/dim]")
+        return client
+
+    console.print(
+        f"[dim]switching to [bold]{target.title}[/bold] — "
+        "booting backend (this can take a moment)…[/dim]"
+    )
+    try:
+        new_cfg = apply_model(target.value, config_path, console)
+    except ModelSwitchError as exc:
+        console.print(Panel(str(exc), title="model switch failed", border_style="red"))
+        return client
+
+    config.llm = new_cfg.llm  # keep in-memory config in sync (prompt budgeting reads num_ctx)
+    new_client = LocalLLMClient(new_cfg.llm)
+    client.close()  # idempotent; frees the old transport
+    console.print(
+        Panel(
+            f"Porter now runs on: [bold]{new_client.model_name}[/bold]\n"
+            f"backend: {new_client.backend_url}",
+            title="model switched",
+            border_style=accent,
+        )
+    )
+    return new_client
 
 
 def _capture_voice(console: Console, voice: VoiceInput | None, accent: str) -> str | None:

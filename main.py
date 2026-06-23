@@ -127,7 +127,7 @@ def main(
 
     config, client = _bootstrap(config_path)
     try:
-        run_repl(client, config, console=console)
+        run_repl(client, config, console=console, config_path=config_path)
     finally:
         client.close()
 
