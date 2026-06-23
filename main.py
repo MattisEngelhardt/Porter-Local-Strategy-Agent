@@ -30,6 +30,13 @@ from core.intake import read_document, read_document_hifi, render_document, rend
 from core.pdf_reader import PdfReadError
 from core.pipeline import AutoInteraction, resolve_memory, run_pipeline
 from core.pptx_reader import PptxReadError
+from core.profile import (
+    PROFILES,
+    ProfileError,
+    active_profile,
+    command_enabled,
+    set_active_profile,
+)
 from core.recruiting import (
     parse_criteria_arg,
     render_screening_excel,
@@ -85,6 +92,25 @@ def _bootstrap(config_path: Path) -> tuple[AppConfig, LocalLLMClient]:
         raise typer.Exit(code=1) from exc
 
     return config, LocalLLMClient(config.llm)
+
+
+def _require_command(command: str) -> None:
+    """Exit early (cleanly) if ``command`` is not enabled in the active dimension profile.
+
+    Default profile ``all`` enables everything, so this is a no-op until a department switches
+    to a specific profile (research / recruiting / finance) via ``switch-profile.ps1``.
+    """
+    active = active_profile()
+    if not command_enabled(active, command):
+        console.print(
+            Panel(
+                f"'{command}' is not part of the active profile '{active.name}' ({active.label}).\n"
+                "Switch with:  .\\switch-profile.ps1 <all|research|analyst|builder>",
+                title="not in this profile",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=0)
 
 
 @app.callback(invoke_without_command=True)
@@ -145,6 +171,7 @@ def research(
     ] = None,
 ) -> None:
     """Search the web via SearXNG and return ranked, deduplicated results."""
+    _require_command("research")
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
     config = _load_config_or_exit(config_path)
@@ -204,6 +231,7 @@ def analyze(
     so this is the scriptable counterpart to the interactive REPL (``python main.py``). ``--effort``
     overrides the auto-detected effort level (otherwise it is inferred from the task).
     """
+    _require_command("analyze")
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
     config, client = _bootstrap(config_path)
@@ -273,6 +301,7 @@ def prepare(
     and renders the chosen deliverable(s): a Neura-styled **PPTX** deck (works locally) and/or a
     **PDF** brief (needs WeasyPrint's GTK runtime; skipped with instructions if absent).
     """
+    _require_command("prepare")
     formats = _FORMAT_CHOICES.get(output_format.lower())
     if formats is None:
         console.print(
@@ -372,6 +401,7 @@ def score_cvs(
     (every score traceable to the CV), ranks best-first, and writes a Neura-styled Excel ranking
     to ``output/``. Criteria are derived from the job profile unless given via ``--criteria``.
     """
+    _require_command("score-cvs")
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
     config, client = _bootstrap(config_path)
@@ -420,6 +450,7 @@ def build_report_cmd(
     Markdown blueprint + an Excel key-figures table to ``output/``. Render a Neura PDF/PPTX from it
     via ``prepare`` when a presentation is needed.
     """
+    _require_command("build-report")
     obj = ctx.obj or {}
     config_path: Path = obj.get("config_path", DEFAULT_CONFIG_PATH)
     config, client = _bootstrap(config_path)
@@ -446,6 +477,51 @@ def build_report_cmd(
         Panel(
             f"Report: {md_path}\nKey figures (Excel): {xlsx_path}",
             border_style=config.output.colors.accent_cyan,
+        )
+    )
+
+
+@app.command()
+def profile(
+    name: Annotated[
+        str | None,
+        typer.Argument(help="Profile to switch to: all | research | analyst | builder"),
+    ] = None,
+) -> None:
+    """Show or switch the active dimension profile (one codebase, per-department behaviour).
+
+    With no argument it shows the active profile and all choices. With a name it switches (stored
+    locally in ./.porter_profile — never in config.yaml, so it never collides with config edits).
+    """
+    if name is not None:
+        try:
+            switched = set_active_profile(name)
+        except ProfileError as exc:
+            console.print(Panel(str(exc), title="unknown profile", border_style="red"))
+            raise typer.Exit(code=1) from exc
+        console.print(
+            Panel(
+                f"Active profile: '{switched.name}' — {switched.label}.\n{switched.description}",
+                title="profile switched",
+                border_style="cyan",
+            )
+        )
+        return
+
+    current = active_profile()
+    table = Table(title="Porter dimension profiles", border_style="cyan")
+    table.add_column("Active", no_wrap=True)
+    table.add_column("Profile", no_wrap=True)
+    table.add_column("Dimension", no_wrap=True)
+    table.add_column("Enables")
+    for prof in PROFILES.values():
+        marker = "●" if prof.name == current.name else ""
+        table.add_row(marker, prof.name, prof.label, prof.description)
+    console.print(table)
+    console.print(
+        Panel(
+            "Switch with:  .\\switch-profile.ps1 <all|research|analyst|builder>",
+            border_style="cyan",
         )
     )
 
