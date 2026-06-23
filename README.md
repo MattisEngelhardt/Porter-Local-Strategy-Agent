@@ -183,6 +183,30 @@ a fresh clone stays clean. If you renamed the model with a custom `--identifier`
 [Switching backend](#switch-llm)), set `$baseModel` in the copy to the underlying model key. Net result:
 **`porter` is one word on both backends — nothing to start by hand.**
 
+### Switch model and role in the REPL (`/model`, `/role`)
+
+Inside the REPL you change Porter's **AI model** and its **role** on the fly, Claude-Code-style: type
+the command, move with the **↑/↓ arrow keys**, and press **Enter** (terminals without a raw-mode TTY
+fall back to a numbered prompt).
+
+```text
+/model   # pick the AI model:  Gemma 4 E4B (fast, local) · Gemma 4 12B (smart, local) · Nemotron 3 Ultra 550B (cloud)
+/role    # pick the role:      Allrounder · Researcher · Analyst · Builder
+```
+
+- **`/model`** boots whatever the choice needs — the same cold start `porter` does — and hot-swaps the
+  live client **without leaving the chat**: a local model starts LM Studio and loads it (reusing the
+  proven `switch-model.ps1` + `porter.local.ps1`); **Nemotron** switches to the OpenRouter cloud (needs
+  a free key — add `OPENAI_API_KEY=sk-or-…` to the gitignored `.env`; local models need no key).
+- **`/role`** switches the active dimension — the same as `switch-profile.ps1`, persisted in
+  `.porter_profile`.
+- **Model and role are independent and stay locked**: changing one never resets the other, so e.g.
+  *Gemma 4 12B + Analyst* holds until you change it. The banner shows both (`model: … role: …`).
+- Skip the menu with an argument: `/model gemma4-12b`, `/role analyst`.
+
+The standalone launchers still work as quick entries: `porter12b` (start on Gemma 4 12B),
+`porter-nemotron` (start on Nemotron), `porter-model <profile>`, and `switch-profile.ps1 <role>`.
+
 ### Persistent memory & delta analysis
 
 With `memory.enabled: true` (default) and `nomic-embed-text` pulled, every run's analysis is
@@ -225,7 +249,8 @@ python main.py analyze --effort low "Latest humanoid robotics funding news"
 # it asks one-at-a-time clarifying questions, shows the research plan + effort to confirm,
 # then runs the multi-agent research and produces a structured analysis. Prefix with
 # '/effort low|high|ultra' to override (alone, it sets the session default). Drop a file
-# path to read a document. Press Ctrl+Space (or type '/voice') to dictate if voice is on.
+# path to read a document. Switch the AI model with '/model' and the role with '/role'
+# (arrow-key menus). Press Ctrl+Space (or type '/voice') to dictate if voice is on.
 porter                    # or: python main.py   — type 'exit' to quit
 
 # Single question — a plain one-shot LLM answer, no research, no clarification
