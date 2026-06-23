@@ -9,6 +9,7 @@ import pytest
 from rich.console import Console
 
 import core.intake as intake
+import core.profile as profile_mod
 from core.config import AppConfig
 from core.intake import ReplInteraction, detect_file_path, read_document, render_result
 from models.research import DocContent, FetchedContent, ResearchReport, SourceTier
@@ -262,3 +263,63 @@ def test_repl_interaction_ask_text(monkeypatch: pytest.MonkeyPatch) -> None:
     out = console.file.getvalue()  # type: ignore[attr-defined]
     assert "mid-research" in out
     assert "Which 1X" in out
+
+
+# --- /role dimension switch (Slice 1) -------------------------------------------------
+
+
+def _role_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, initial: str | None = None
+) -> Path:
+    """Point core.profile at a tmp .porter_profile and clear the env override."""
+    pfile = tmp_path / ".porter_profile"
+    if initial is not None:
+        pfile.write_text(initial + "\n", encoding="utf-8")
+    monkeypatch.setattr(profile_mod, "_PROFILE_FILE", pfile)
+    monkeypatch.delenv("PORTER_PROFILE", raising=False)
+    return pfile
+
+
+def test_role_switch_menu_persists_choice(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/role opens the picker; the chosen role is written to .porter_profile."""
+    pfile = _role_file(monkeypatch, tmp_path, initial="all")
+    monkeypatch.setattr(intake, "select_choice", lambda *a, **k: "analyst")
+    intake._handle_role_switch(_capture_console(), "cyan", "/role")
+    assert pfile.read_text(encoding="utf-8").strip() == "analyst"
+
+
+def test_role_switch_direct_arg_skips_menu(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/role <name> switches directly, without opening the menu."""
+    pfile = _role_file(monkeypatch, tmp_path, initial="all")
+
+    def _no_menu(*a: object, **k: object) -> str:
+        pytest.fail("menu must not open when a role name is given")
+
+    monkeypatch.setattr(intake, "select_choice", _no_menu)
+    intake._handle_role_switch(_capture_console(), "cyan", "/role Builder")
+    assert pfile.read_text(encoding="utf-8").strip() == "builder"
+
+
+def test_role_switch_cancel_keeps_current(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Cancelling the picker (None) leaves the active role unchanged."""
+    pfile = _role_file(monkeypatch, tmp_path, initial="research")
+    monkeypatch.setattr(intake, "select_choice", lambda *a, **k: None)
+    intake._handle_role_switch(_capture_console(), "cyan", "/role")
+    assert pfile.read_text(encoding="utf-8").strip() == "research"
+
+
+def test_role_switch_unknown_arg_is_handled(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """/role <bogus> reports the error and leaves the role unchanged."""
+    pfile = _role_file(monkeypatch, tmp_path, initial="all")
+    console = _capture_console()
+    intake._handle_role_switch(console, "cyan", "/role bogus")
+    assert pfile.read_text(encoding="utf-8").strip() == "all"
+    assert "unknown role" in console.file.getvalue()  # type: ignore[attr-defined]

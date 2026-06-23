@@ -27,8 +27,11 @@ from core.excel_reader import ExcelReadError, read_excel
 from core.intent_parser import parse_effort_override
 from core.memory import MemoryStore, append_brain_additions
 from core.pdf_reader import PdfReadError, read_pdf
+from core.picker import Choice
+from core.picker import select as select_choice
 from core.pipeline import resolve_memory, run_pipeline
 from core.pptx_reader import read_pptx
+from core.profile import PROFILES, ProfileError, active_profile, set_active_profile
 from core.researcher import SearXNGError
 from core.startup import StartupError
 from core.voice_input import VoiceError, VoiceInput, build_voice_input
@@ -255,9 +258,12 @@ def run_repl(
     console.print(
         Panel(
             f"[bold]Porter[/bold] — your local strategy agent\n"
-            f"model: [bold]{client.model_name}[/bold]   backend: {client.backend_url}\n"
+            f"model: [bold]{client.model_name}[/bold]   role: [bold]{active_profile().label}[/bold]"
+            f"   backend: {client.backend_url}\n"
             "Type a task — the agent plans, researches (multi-agent), and produces a structured "
             "analysis.\n"
+            "Switch role: [bold]/role[/bold] "
+            "(Researcher / Analyst / Builder / Allrounder).\n"
             "Effort: prefix with [bold]/effort low|high|ultra[/bold] (alone = set the session "
             "default; auto-detected otherwise).\n"
             "Or drop a file path (PDF / image / .xlsx) to read it."
@@ -292,6 +298,10 @@ def run_repl(
                 text = spoken
                 console.print(f"[dim]heard:[/dim] {text}")
 
+            if text.lower() == "/role" or text.lower().startswith("/role "):
+                _handle_role_switch(console, accent, text)
+                continue
+
             override, stripped = parse_effort_override(text)
             if override is not None and not stripped:
                 # "/effort ultra" with no task → set the session default effort.
@@ -312,6 +322,53 @@ def run_repl(
     finally:
         if voice is not None:
             voice.stop()
+
+
+def _handle_role_switch(console: Console, accent: str, raw: str) -> None:
+    """Switch Porter's active role (Researcher / Analyst / Builder / Allrounder).
+
+    ``/role`` opens an arrow-key menu; ``/role <name>`` switches directly. The choice persists in
+    ``.porter_profile`` via :func:`set_active_profile` and is **independent of the model** — this
+    never touches the ``llm:`` config (see core/profile.py for the lock/independence rationale).
+    """
+    parts = raw.split(maxsplit=1)
+    arg = parts[1].strip().lower() if len(parts) > 1 else ""
+    current = active_profile()
+
+    if arg:
+        chosen: str | None = arg
+    else:
+        choices = [
+            Choice(value=p.name, title=p.label, hint=p.description) for p in PROFILES.values()
+        ]
+        chosen = select_choice(
+            "Pick Porter's role",
+            choices,
+            active_value=current.name,
+            console=console,
+        )
+
+    if not chosen:
+        console.print("[dim]role unchanged[/dim]")
+        return
+
+    try:
+        switched = set_active_profile(chosen)
+    except ProfileError as exc:
+        console.print(Panel(str(exc), title="unknown role", border_style="red"))
+        return
+
+    if switched.name == current.name:
+        console.print(f"[dim]role stays [bold]{switched.label}[/bold][/dim]")
+        return
+
+    console.print(
+        Panel(
+            f"Porter is now: [bold]{switched.label}[/bold]\n{switched.description}",
+            title="role switched",
+            border_style=accent,
+        )
+    )
 
 
 def _capture_voice(console: Console, voice: VoiceInput | None, accent: str) -> str | None:
